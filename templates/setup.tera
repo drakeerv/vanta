@@ -1,0 +1,53 @@
+{% extends "base.tera" %}
+
+{% block title %}Setup - VANTA{% endblock title %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="card auth-card">
+        <h2>Setup Vault</h2>
+        <p>Create a master password to secure your vault.</p>
+        <form id="setupForm">
+            <div>
+                <label for="password">Master Password</label>
+                <input type="password" id="password" name="password" placeholder="Enter a strong password" required>
+            </div>
+            <button type="submit">Initialize Vault</button>
+        </form>
+        <p id="message" class="error"></p>
+    </div>
+</div>
+
+<script>
+    document.getElementById('setupForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = e.target.querySelector('button');
+        const password = document.getElementById('password').value;
+        const messageEl = document.getElementById('message');
+        messageEl.innerText = '';
+        btn.disabled = true;
+        btn.innerText = 'Initializing...';
+        
+        try {
+            const response = await fetch('/api/setup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            
+            if (response.ok) {
+                window.location.href = '/app';
+            } else {
+                const text = await response.text();
+                messageEl.innerText = 'Error: ' + text;
+                btn.disabled = false;
+                btn.innerText = 'Initialize Vault';
+            }
+        } catch (error) {
+            messageEl.innerText = 'Error: ' + error.message;
+            btn.disabled = false;
+            btn.innerText = 'Initialize Vault';
+        }
+    });
+</script>
+{% endblock content %}
