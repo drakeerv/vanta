@@ -885,47 +885,6 @@ impl Vault {
         Ok(entry)
     }
 
-    /// Lists images filtered by a specific tag.
-    pub fn list_by_tag(&self, tag: &str) -> Result<Vec<ImageEntry>, VaultError> {
-        if !self.is_unlocked() {
-            return Err(VaultError::EncryptionError);
-        }
-
-        let tag = Self::normalize_tag(tag)?;
-
-        let vault_data = {
-            let data_guard = self
-                .data
-                .read()
-                .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
-            data_guard
-                .as_ref()
-                .ok_or(VaultError::EncryptionError)?
-                .clone()
-        };
-
-        let entries = &vault_data.entries;
-        let key = vault_data.encryption_key.expose_secret();
-
-        // Get the list of image IDs for this tag from in-memory index
-        let image_ids: Vec<Uuid> = vault_data.tag_index
-            .get(&tag)
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default();
-
-        // Fetch each image entry
-        let mut results = Vec::new();
-        for id in image_ids {
-            if let Some(encrypted_metadata) = entries.get(id.as_bytes())? {
-                if let Ok(entry) = Self::decrypt_metadata(key, id, &encrypted_metadata) {
-                    results.push(entry);
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
     /// Advanced tag search: include tags (AND) and exclude tags (NOT).
     /// Optimizes by starting with the smallest tag set for include tags.
     pub fn search_by_tags(
@@ -1020,32 +979,6 @@ impl Vault {
         results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
         Ok(results)
-    }
-
-    /// Returns all unique tags in the vault with their image counts.
-    pub fn list_tags_with_counts(&self) -> Result<Vec<(String, usize)>, VaultError> {
-        if !self.is_unlocked() {
-            return Err(VaultError::EncryptionError);
-        }
-
-        let vault_data = {
-            let data_guard = self
-                .data
-                .read()
-                .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
-            data_guard
-                .as_ref()
-                .ok_or(VaultError::EncryptionError)?
-                .clone()
-        };
-
-        let mut tags: Vec<(String, usize)> = vault_data.tag_index
-            .iter()
-            .map(|(tag, ids)| (tag.clone(), ids.len()))
-            .collect();
-
-        tags.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(tags)
     }
 
     /// Returns all unique tags in the vault.
