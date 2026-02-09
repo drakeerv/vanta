@@ -644,38 +644,47 @@ impl Vault {
             return Err(VaultError::EncryptionError);
         }
 
-        // Get write lock to update tag index
-        let mut data_lock = self
-            .data
-            .write()
-            .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
-        let vault_data = data_lock
-            .as_mut()
-            .ok_or(VaultError::EncryptionError)?;
+        // Scope to hold the lock only during synchronous DB operations
+        {
+            // Get write lock to update tag index
+            let mut data_lock = self
+                .data
+                .write()
+                .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
+            let vault_data = data_lock
+                .as_mut()
+                .ok_or(VaultError::EncryptionError)?;
 
-        let entries = &vault_data.entries;
+            let entries = &vault_data.entries;
 
-        // Verify metadata exists and is valid before deleting
-        let encrypted_metadata = entries
-            .get(id.as_bytes())?
-            .ok_or_else(|| VaultError::NotFound(id.to_string()))?;
+            // Verify metadata exists and is valid before deleting
+            let encrypted_metadata = entries
+                .get(id.as_bytes())?
+                .ok_or_else(|| VaultError::NotFound(id.to_string()))?;
 
-        let entry = Self::decrypt_metadata(
-            vault_data.encryption_key.expose_secret(),
-            id,
-            &encrypted_metadata,
-        )?;
+            // Decrypt to get tags for cleanup
+            if let Ok(entry) = Self::decrypt_metadata(
+                vault_data.encryption_key.expose_secret(),
+                id,
+                &encrypted_metadata,
+            ) {
+                // Clean up tag index before deleting the image
+                Self::cleanup_tags_for_image_in_index(&mut vault_data.tag_index, &entry);
+            }
 
-        // Clean up tag index before deleting the image
-        Self::cleanup_tags_for_image_in_index(&mut vault_data.tag_index, &entry);
+            // Remove metadata from sled
+            entries.remove(id.as_bytes())?;
+            entries.flush()?;
+        } // Lock is dropped here, so we don't hold it across the await below
 
         // Remove the entire UUID directory and all variant files
         let dir_path = format!("{DATA_DIR}/{}", id);
-        fs::remove_dir_all(&dir_path).await?;
-
-        // Remove metadata from sled
-        entries.remove(id.as_bytes())?;
-        entries.flush()?;
+        if let Err(e) = fs::remove_dir_all(&dir_path).await {
+            // If the directory is already gone, that's fine. Otherwise return error.
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(VaultError::Io(e));
+            }
+        }
 
         Ok(())
     }
