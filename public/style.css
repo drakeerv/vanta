@@ -181,7 +181,6 @@ input[type="text"], input[type="password"] {
     justify-content: center;
     align-items: center;
     gap: 0.5rem;
-    background: rgba(0, 0, 0, 0.8);
     padding: 1rem;
     flex-wrap: wrap;
 }
