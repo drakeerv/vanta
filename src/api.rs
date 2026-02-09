@@ -34,6 +34,12 @@ pub struct TagRequest {
 }
 
 #[derive(Deserialize)]
+pub struct RenameTagRequest {
+    pub old_tag: String,
+    pub new_tag: String,
+}
+
+#[derive(Deserialize)]
 pub struct ListParams {
     /// Tag search query: space-separated tags. Prefix with - to exclude.
     /// Example: "landscape sunset -blurry" = has landscape AND sunset, NOT blurry
@@ -49,6 +55,7 @@ pub fn get_api_router(state: AppState) -> Router {
         .route("/images/{id}/tags", post(add_tag))
         .route("/images/{id}/tags", delete(remove_tag))
         .route("/tags", get(list_tags))
+        .route("/tags/rename", post(rename_tag))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -339,4 +346,20 @@ async fn list_tags(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(tags))
+}
+
+async fn rename_tag(
+    State(state): State<AppState>,
+    Json(payload): Json<RenameTagRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let vault = state.vault.read().await;
+
+    let count = vault
+        .rename_tag(&payload.old_tag, &payload.new_tag)
+        .map_err(|e| match e {
+            VaultError::Corruption(msg) => (StatusCode::BAD_REQUEST, msg),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        })?;
+
+    Ok(Json(serde_json::json!({ "renamed": count })))
 }

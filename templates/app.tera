@@ -5,8 +5,16 @@
 {% block content %}
 <div class="app-header">
     <h2>Your Vault</h2>
-    <div class="actions">
+    <button class="hamburger" id="hamburgerBtn" onclick="toggleMobileMenu()" aria-label="Menu">&#9776;</button>
+    <div class="actions" id="actionsMenu">
         <button onclick="openUploadModal()">Upload</button>
+        <div class="dropdown">
+            <button onclick="toggleToolsMenu()">Tools ▾</button>
+            <div class="dropdown-menu" id="toolsDropdown">
+                <button onclick="openBulkTagMode()">Bulk Tag</button>
+                <button onclick="openRenameTagModal()">Rename Tag</button>
+            </div>
+        </div>
         <button onclick="logout()">Logout</button>
         <button onclick="lockVault()" class="danger">Lock Vault</button>
     </div>
@@ -20,7 +28,7 @@
         <div class="upload-zone" id="uploadZone">
             <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" multiple>
             <p>Drag & drop images here or click to browse</p>
-            <p class="hint">Supports JPEG, PNG, WebP</p>
+            <p class="hint">Supports JPEG, PNG, WebP (max 50 MB each)</p>
         </div>
         <div class="upload-actions" id="uploadActions" style="display: none;">
             <span class="file-name" id="fileName"></span>
@@ -33,10 +41,11 @@
 
 <!-- Tag Search Bar -->
 <div class="tag-bar" id="tagBar">
-    <input type="text" id="tagSearch" placeholder="Search tags: tag1 tag2 -excluded" autocomplete="off">
+    <div class="search-input-wrapper">
+        <input type="text" id="tagSearch" placeholder="Search tags" autocomplete="off">
+        <div id="tagSuggestions" class="tag-suggestions"></div>
+    </div>
     <button onclick="searchByTags()">Search</button>
-    <button onclick="clearTagSearch()" class="secondary">Clear</button>
-    <div id="tagSuggestions" class="tag-suggestions"></div>
 </div>
 
 <h3>Images <span id="imageCount" class="count"></span></h3>
@@ -64,10 +73,13 @@
         <h3>Manage Tags</h3>
         <div id="currentTags" class="tag-list"></div>
         <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
-            <input type="text" id="newTagInput" placeholder="Add tag..." maxlength="32" style="flex: 1;">
+            <div style="position: relative; flex: 1;">
+                <input type="text" id="newTagInput" placeholder="Add tags..." style="width: 100%; box-sizing: border-box;" autocomplete="off">
+                <div id="addTagSuggestions" class="tag-suggestions"></div>
+            </div>
             <button onclick="addTagToImage()">Add</button>
         </div>
-        <p class="hint" style="margin-top: 0.5rem;">Letters, numbers, hyphens, underscores only</p>
+        <p class="hint" style="margin-top: 0.5rem;">Space separated. Letters, numbers, hyphens, underscores only</p>
     </div>
 </div>
 
@@ -80,12 +92,74 @@
     </div>
 </div>
 
+<!-- Bulk Tag Banner (shown above gallery during bulk mode) -->
+<div id="bulkTagBanner" class="bulk-banner" style="display:none;">
+    <span id="bulkTagCount" class="bulk-count">0 selected</span>
+    <span class="bulk-hint">Click images to toggle selection</span>
+    <button onclick="applyBulkTag()" id="bulkTagSaveBtn">Apply</button>
+    <button onclick="cancelBulkTag()" class="bulk-cancel-btn">Cancel</button>
+</div>
+
+<!-- Bulk Tag Modal -->
+<div id="bulkTagModal" class="modal-overlay">
+    <div class="modal card" style="max-width:420px;">
+        <button class="close-btn" onclick="cancelBulkTag()">&times;</button>
+        <h3>Bulk Tag</h3>
+        <p class="hint" style="margin-top:-0.5rem;">Add tags then select which images should have them.</p>
+        <div class="bulk-tags-display" id="bulkTagsDisplay"></div>
+        <div style="position:relative;margin-top:0.5rem;">
+            <input type="text" id="bulkTagName" placeholder="Type tag and press Enter..." autocomplete="off">
+            <div id="bulkTagSuggestions" class="tag-suggestions"></div>
+        </div>
+        <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
+            <button onclick="cancelBulkTag()" class="secondary">Cancel</button>
+            <button onclick="startBulkSelection()" id="bulkStartBtn">Select Images</button>
+        </div>
+    </div>
+</div>
+
+<!-- Rename Tag Modal -->
+<div id="renameTagModal" class="modal-overlay">
+    <div class="modal card" style="max-width: 400px;">
+        <button class="close-btn" onclick="closeRenameTagModal()">&times;</button>
+        <h3>Rename Tag</h3>
+        <div style="display:flex;flex-direction:column;gap:1rem;">
+            <div style="position:relative;">
+                <label class="hint" style="display:block;margin-bottom:0.25rem;">Current tag</label>
+                <input type="text" id="renameOldTag" placeholder="Select tag to rename" autocomplete="off">
+                <div id="renameOldTagSuggestions" class="tag-suggestions"></div>
+            </div>
+            <div>
+                <label class="hint" style="display:block;margin-bottom:0.25rem;">New name</label>
+                <input type="text" id="renameNewTag" placeholder="New tag name" autocomplete="off">
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button onclick="closeRenameTagModal()" class="secondary">Cancel</button>
+                <button onclick="executeRenameTag()" id="renameTagBtn">Rename</button>
+            </div>
+            <p id="renameTagMsg" style="margin:0;"></p>
+        </div>
+    </div>
+</div>
+
 <script>
     let currentLightboxImageId = null;
     let currentLightboxTags = [];
     let currentTagQuery = '';
     let allImages = [];
     let allTags = []; // {name, count}
+
+    // Hamburger menu
+    function toggleMobileMenu() {
+        document.getElementById('actionsMenu').classList.toggle('open');
+    }
+    document.addEventListener('click', (e) => {
+        const menu = document.getElementById('actionsMenu');
+        const btn = document.getElementById('hamburgerBtn');
+        if (!menu.contains(e.target) && !btn.contains(e.target)) {
+            menu.classList.remove('open');
+        }
+    });
     
     const uploadModal = document.getElementById('uploadModal');
     const tagModal = document.getElementById('tagModal');
@@ -171,32 +245,47 @@
 
     async function addTagToImage() {
         const input = document.getElementById('newTagInput');
-        const tag = input.value.trim();
-        if (!tag || !currentLightboxImageId) return;
+        const rawValue = input.value.trim();
+        if (!rawValue || !currentLightboxImageId) return;
+        
+        const tags = rawValue.split(/\s+/).filter(t => t.length > 0);
+        if (tags.length === 0) return;
 
-        try {
-            const response = await fetch(`/api/images/${currentLightboxImageId}/tags`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tag })
-            });
+        let successCount = 0;
+        input.disabled = true;
 
-            if (response.ok) {
-                const entry = await response.json();
-                currentLightboxTags = entry.tags;
-                // Update allImages cache
-                const idx = allImages.findIndex(img => img.id === currentLightboxImageId);
-                if (idx !== -1) allImages[idx].tags = entry.tags;
-                renderCurrentTags();
-                renderLightboxTags();
-                input.value = '';
-                loadTags();
-            } else {
-                const text = await response.text();
-                alert('Error: ' + text);
+        for (const tag of tags) {
+            try {
+                const response = await fetch(`/api/images/${currentLightboxImageId}/tags`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tag })
+                });
+
+                if (response.ok) {
+                    const entry = await response.json();
+                    currentLightboxTags = entry.tags;
+                    // Update allImages cache
+                    const idx = allImages.findIndex(img => img.id === currentLightboxImageId);
+                    if (idx !== -1) allImages[idx].tags = entry.tags;
+                    successCount++;
+                } else {
+                    console.error(`Failed to add tag: ${tag}`);
+                }
+            } catch (error) {
+                console.error(`Error adding tag: ${tag}`, error);
             }
-        } catch (error) {
-            alert('Error adding tag');
+        }
+        
+        input.disabled = false;
+        
+        if (successCount > 0) {
+            renderCurrentTags();
+            renderLightboxTags();
+            input.value = '';
+            loadTags();
+        } else if (successCount === 0 && tags.length > 0) {
+             alert('Failed to add tags');
         }
     }
 
@@ -274,8 +363,22 @@
         }
     });
 
+    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
     function showFileSelection() {
         const count = fileInput.files.length;
+        const msg = document.getElementById('uploadMessage');
+        let oversized = 0;
+        for (let i = 0; i < fileInput.files.length; i++) {
+            if (fileInput.files[i].size > MAX_FILE_SIZE) oversized++;
+        }
+        if (oversized > 0) {
+            msg.innerText = `${oversized} file(s) exceed 50 MB limit`;
+            msg.className = 'error';
+        } else {
+            msg.innerText = '';
+            msg.className = '';
+        }
         fileNameEl.innerText = count === 1 ? fileInput.files[0].name : `${count} files selected`;
         uploadActions.style.display = 'flex';
     }
@@ -333,10 +436,12 @@
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            if (bulkTagMode || bulkTagModal.classList.contains('active')) { cancelBulkTag(); return; }
             closeLightbox();
             closeUploadModal();
             closeTagModal();
             closeInfoModal();
+            closeRenameTagModal();
         }
     });
 
@@ -358,66 +463,339 @@
         hideSuggestions();
     }
 
-    function clearTagSearch() {
-        tagSearchInput.value = '';
-        currentTagQuery = '';
-        loadImages();
-        hideSuggestions();
-    }
-
     // Tag suggestions
-    function showSuggestions() {
-        const input = tagSearchInput.value;
-        const words = input.split(/\s+/);
-        const currentWord = words[words.length - 1] || '';
-        const isExclude = currentWord.startsWith('-');
-        const searchTerm = isExclude ? currentWord.slice(1) : currentWord;
-        
-        if (searchTerm.length === 0) {
-            hideSuggestions();
-            return;
-        }
-        
-        const matches = allTags
-            .filter(t => t.name.toLowerCase().includes(searchTerm.toLowerCase()))
-            .slice(0, 8);
-        
-        if (matches.length === 0) {
-            hideSuggestions();
-            return;
-        }
-        
-        tagSuggestions.innerHTML = matches.map(t => 
-            `<div class="suggestion" onclick="selectSuggestion('${isExclude ? '-' : ''}${t.name}')">${isExclude ? '-' : ''}${t.name}</div>`
-        ).join('');
-        tagSuggestions.style.display = 'block';
-    }
-
-    function selectSuggestion(tag) {
-        const input = tagSearchInput.value;
-        const words = input.split(/\s+/);
-        words[words.length - 1] = tag;
-        tagSearchInput.value = words.join(' ') + ' ';
-        tagSearchInput.focus();
-        hideSuggestions();
-    }
-
     function hideSuggestions() {
-        tagSuggestions.style.display = 'none';
+        document.querySelectorAll('.tag-suggestions').forEach(el => el.style.display = 'none');
     }
 
-    tagSearchInput.addEventListener('input', showSuggestions);
+    function setupTagSuggestions(inputId, containerId) {
+        const input = document.getElementById(inputId);
+        const container = document.getElementById(containerId);
+        if (!input || !container) return;
+        
+        const show = () => {
+            const rawVal = input.value;
+            const words = rawVal.split(/\s+/);
+            const currentWord = words[words.length - 1] || '';
+            const isExclude = currentWord.startsWith('-');
+            const searchTerm = isExclude ? currentWord.slice(1) : currentWord;
+            
+            if (searchTerm.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            const matches = allTags
+                .filter(t => t.name.toLowerCase().includes(searchTerm.toLowerCase()))
+                .slice(0, 8);
+            
+            if (matches.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            container.innerHTML = matches.map(t => {
+                 const val = (isExclude ? '-' : '') + t.name;
+                 return `<div class="suggestion" role="button">${val}</div>`; 
+            }).join('');
+            container.style.display = 'block';
+
+            container.querySelectorAll('.suggestion').forEach(child => {
+                child.onclick = (e) => {
+                   e.preventDefault();
+                   const tag = child.innerText;
+                   const words = input.value.split(/\s+/);
+                   words[words.length - 1] = tag;
+                   input.value = words.join(' ') + ' ';
+                   input.focus();
+                   container.style.display = 'none';
+                };
+            });
+        };
+
+        input.addEventListener('input', show);
+        input.addEventListener('focus', () => { if(input.value) show(); });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') hideSuggestions();
+        });
+        input.addEventListener('blur', () => setTimeout(hideSuggestions, 150));
+    }
+
+    // Initialize suggestions
+    setupTagSuggestions('tagSearch', 'tagSuggestions');
+    setupTagSuggestions('newTagInput', 'addTagSuggestions');
+
     tagSearchInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
             searchByTags();
-        } else if (e.key === 'Escape') {
-            hideSuggestions();
         }
     });
-    tagSearchInput.addEventListener('blur', () => {
-        setTimeout(hideSuggestions, 150);
+
+    // ===== Tools Menu =====
+    function toggleToolsMenu() {
+        document.getElementById('toolsDropdown').classList.toggle('open');
+    }
+    document.addEventListener('click', (e) => {
+        const dd = document.getElementById('toolsDropdown');
+        if (dd && !e.target.closest('.dropdown')) {
+            dd.classList.remove('open');
+        }
     });
+
+    // ===== Bulk Tag Mode =====
+    let bulkTagMode = false;
+    let bulkSelected = new Set();
+    let bulkTags = [];
+    const bulkTagModal = document.getElementById('bulkTagModal');
+
+    function openBulkTagMode() {
+        bulkTagMode = false;
+        bulkSelected.clear();
+        bulkTags = [];
+        document.getElementById('actionsMenu').classList.remove('open');
+        document.getElementById('toolsDropdown').classList.remove('open');
+        document.getElementById('bulkTagName').value = '';
+        renderBulkTagChips();
+        bulkTagModal.classList.add('active');
+        document.body.style.overflow = 'hidden';
+        document.getElementById('bulkTagName').focus();
+    }
+
+    bulkTagModal.addEventListener('click', (e) => {
+        if (e.target === bulkTagModal) cancelBulkTag();
+    });
+
+    function startBulkSelection() {
+        if (bulkTags.length === 0) { alert('Add at least one tag first'); return; }
+        bulkTagModal.classList.remove('active');
+        document.body.style.overflow = '';
+        bulkTagMode = true;
+        document.getElementById('bulkTagBanner').style.display = 'flex';
+        updateBulkGallery();
+    }
+
+    function cancelBulkTag() {
+        bulkTagMode = false;
+        bulkSelected.clear();
+        bulkTags = [];
+        bulkTagModal.classList.remove('active');
+        document.body.style.overflow = '';
+        document.getElementById('bulkTagBanner').style.display = 'none';
+        updateBulkGallery();
+    }
+
+    function addBulkTag(tagName) {
+        const t = tagName.trim().toLowerCase();
+        if (t && !bulkTags.includes(t)) {
+            bulkTags.push(t);
+            renderBulkTagChips();
+        }
+    }
+
+    function removeBulkTag(tagName) {
+        bulkTags = bulkTags.filter(t => t !== tagName);
+        renderBulkTagChips();
+    }
+
+    function renderBulkTagChips() {
+        const container = document.getElementById('bulkTagsDisplay');
+        if (bulkTags.length === 0) {
+            container.innerHTML = '<p class="hint" style="margin:0;">No tags added yet</p>';
+        } else {
+            container.innerHTML = bulkTags.map(tag =>
+                `<span class="tag-chip">${tag} <button onclick="removeBulkTag('${tag}')">&times;</button></span>`
+            ).join('');
+        }
+        // Update the "Select Images" button state
+        const startBtn = document.getElementById('bulkStartBtn');
+        if (startBtn) startBtn.disabled = bulkTags.length === 0;
+    }
+
+    function imageHasAllBulkTags(img) {
+        const imgTags = (img.tags || []).map(t => t.toLowerCase());
+        return bulkTags.every(t => imgTags.includes(t));
+    }
+
+    function updateBulkGallery() {
+        const gallery = document.getElementById('gallery');
+        const cards = gallery.querySelectorAll('.image-card');
+        const hasTags = bulkTags.length > 0;
+
+        cards.forEach((card) => {
+            const imgId = card.dataset.imageId;
+            if (!imgId) return;
+            card.classList.remove('bulk-mode', 'bulk-selected', 'bulk-dimmed');
+            if (!bulkTagMode) return;
+
+            card.classList.add('bulk-mode');
+            const img = allImages.find(i => i.id === imgId);
+            if (!img) return;
+
+            const wasOriginal = hasTags && imageHasAllBulkTags(img);
+            const toggled = bulkSelected.has(imgId);
+            const willHaveTag = wasOriginal !== toggled;
+
+            if (willHaveTag) {
+                card.classList.add('bulk-selected');
+            } else if (hasTags) {
+                card.classList.add('bulk-dimmed');
+            }
+        });
+
+        let count = 0;
+        allImages.forEach(img => {
+            const wasOriginal = hasTags && imageHasAllBulkTags(img);
+            const toggled = bulkSelected.has(img.id);
+            if (wasOriginal !== toggled) count++;
+        });
+        document.getElementById('bulkTagCount').innerText = `${count} selected`;
+    }
+
+    document.getElementById('bulkTagName').addEventListener('keydown', (e) => {
+        const input = e.target;
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const parts = input.value.split(/\s+/).filter(t => t.length > 0);
+            parts.forEach(t => addBulkTag(t));
+            input.value = '';
+        } else if (e.key === 'Backspace' && input.value === '' && bulkTags.length > 0) {
+            removeBulkTag(bulkTags[bulkTags.length - 1]);
+        }
+    });
+
+    function handleBulkClick(imageId) {
+        if (bulkSelected.has(imageId)) {
+            bulkSelected.delete(imageId);
+        } else {
+            bulkSelected.add(imageId);
+        }
+        updateBulkGallery();
+    }
+
+    async function applyBulkTag() {
+        if (bulkTags.length === 0) return;
+
+        const btn = document.getElementById('bulkTagSaveBtn');
+        btn.disabled = true;
+        btn.innerText = 'Applying...';
+
+        let errors = 0;
+        const hasTags = bulkTags.length > 0;
+        for (const img of allImages) {
+            const wasOriginal = hasTags && imageHasAllBulkTags(img);
+            const toggled = bulkSelected.has(img.id);
+            const shouldHaveTag = wasOriginal !== toggled;
+
+            if (shouldHaveTag && !wasOriginal) {
+                for (const tag of bulkTags) {
+                    const imgTags = (img.tags || []).map(t => t.toLowerCase());
+                    if (imgTags.includes(tag)) continue;
+                    try {
+                        const res = await fetch(`/api/images/${img.id}/tags`, {
+                            method: 'POST',
+                            headers: {'Content-Type':'application/json'},
+                            body: JSON.stringify({tag})
+                        });
+                        if (res.ok) {
+                            const entry = await res.json();
+                            const idx = allImages.findIndex(i => i.id === img.id);
+                            if (idx !== -1) allImages[idx].tags = entry.tags;
+                        } else errors++;
+                    } catch { errors++; }
+                }
+            } else if (!shouldHaveTag && wasOriginal) {
+                for (const tag of bulkTags) {
+                    try {
+                        const res = await fetch(`/api/images/${img.id}/tags?tag=${encodeURIComponent(tag)}`, {
+                            method: 'DELETE'
+                        });
+                        if (res.ok) {
+                            const entry = await res.json();
+                            const idx = allImages.findIndex(i => i.id === img.id);
+                            if (idx !== -1) allImages[idx].tags = entry.tags;
+                        } else errors++;
+                    } catch { errors++; }
+                }
+            }
+        }
+
+        btn.disabled = false;
+        btn.innerText = 'Apply';
+
+        if (errors > 0) alert(`${errors} operation(s) failed`);
+
+        cancelBulkTag();
+        loadImages();
+        loadTags();
+    }
+
+    // ===== Rename Tag =====
+    const renameTagModal = document.getElementById('renameTagModal');
+
+    function openRenameTagModal() {
+        document.getElementById('actionsMenu').classList.remove('open');
+        document.getElementById('toolsDropdown').classList.remove('open');
+        renameTagModal.classList.add('active');
+        document.getElementById('renameOldTag').value = '';
+        document.getElementById('renameNewTag').value = '';
+        document.getElementById('renameTagMsg').innerText = '';
+        document.getElementById('renameOldTag').focus();
+    }
+
+    function closeRenameTagModal() {
+        renameTagModal.classList.remove('active');
+    }
+
+    renameTagModal.addEventListener('click', (e) => {
+        if (e.target === renameTagModal) closeRenameTagModal();
+    });
+
+    async function executeRenameTag() {
+        const oldTag = document.getElementById('renameOldTag').value.trim();
+        const newTag = document.getElementById('renameNewTag').value.trim();
+        const msg = document.getElementById('renameTagMsg');
+
+        if (!oldTag || !newTag) {
+            msg.innerText = 'Both fields are required';
+            msg.className = 'error';
+            return;
+        }
+
+        const btn = document.getElementById('renameTagBtn');
+        btn.disabled = true;
+        btn.innerText = 'Renaming...';
+
+        try {
+            const res = await fetch('/api/tags/rename', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({old_tag: oldTag, new_tag: newTag})
+            });
+            if (res.ok) {
+                const data = await res.json();
+                msg.innerText = `Renamed across ${data.renamed} image(s)`;
+                msg.className = 'success';
+                loadImages();
+                loadTags();
+                setTimeout(() => closeRenameTagModal(), 1200);
+            } else {
+                const text = await res.text();
+                msg.innerText = 'Error: ' + text;
+                msg.className = 'error';
+            }
+        } catch (error) {
+            msg.innerText = 'Failed to rename tag';
+            msg.className = 'error';
+        }
+
+        btn.disabled = false;
+        btn.innerText = 'Rename';
+    }
+
+    // Setup suggestions for bulk tag and rename tag
+    setupTagSuggestions('bulkTagName', 'bulkTagSuggestions');
+    setupTagSuggestions('renameOldTag', 'renameOldTagSuggestions');
 
     async function loadImages() {
         const gallery = document.getElementById('gallery');
@@ -450,16 +828,25 @@
             images.forEach(image => {
                 const div = document.createElement('div');
                 div.className = 'image-card';
+                div.dataset.imageId = image.id;
+                div.onclick = () => {
+                    if (bulkTagMode) {
+                        handleBulkClick(image.id);
+                    } else {
+                        openLightbox(image.id);
+                    }
+                };
                 
                 const img = document.createElement('img');
                 img.src = `/api/images/${image.id}/thumbnail`;
                 img.loading = 'lazy';
                 img.alt = 'Encrypted Image';
-                img.onclick = () => openLightbox(image.id);
                 
                 div.appendChild(img);
                 gallery.appendChild(div);
             });
+
+            if (bulkTagMode) updateBulkGallery();
             
         } catch (error) {
             gallery.innerText = `Error: ${error.message}`;
@@ -484,6 +871,10 @@
         let errorCount = 0;
 
         for (let i = 0; i < files.length; i++) {
+            if (files[i].size > MAX_FILE_SIZE) {
+                errorCount++;
+                continue;
+            }
             msg.innerText = `Uploading ${i + 1} of ${files.length}...`;
             
             const formData = new FormData();

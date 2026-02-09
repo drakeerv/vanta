@@ -724,6 +724,9 @@ impl Vault {
             }
         }
 
+        // Sort by created_at descending (newest first)
+        read_entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
         Ok(read_entries)
     }
 
@@ -1001,6 +1004,75 @@ impl Vault {
         let mut tags: Vec<String> = vault_data.tag_index.keys().cloned().collect();
         tags.sort();
         Ok(tags)
+    }
+
+    /// Renames a tag across all images in the vault.
+    pub fn rename_tag(&self, old_tag: &str, new_tag: &str) -> Result<u32, VaultError> {
+        if !self.is_unlocked() {
+            return Err(VaultError::EncryptionError);
+        }
+
+        let old_tag = Self::normalize_tag(old_tag)?;
+        let new_tag = Self::normalize_tag(new_tag)?;
+
+        if old_tag == new_tag {
+            return Ok(0);
+        }
+
+        let mut data_lock = self
+            .data
+            .write()
+            .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
+        let vault_data = data_lock
+            .as_mut()
+            .ok_or(VaultError::EncryptionError)?;
+
+        let entries = &vault_data.entries;
+        let key = vault_data.encryption_key.expose_secret();
+
+        // Get all image IDs that have the old tag
+        let image_ids: Vec<Uuid> = vault_data
+            .tag_index
+            .get(&old_tag)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+        if image_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut count = 0u32;
+
+        for image_id in &image_ids {
+            let encrypted_metadata = entries
+                .get(image_id.as_bytes())?
+                .ok_or_else(|| VaultError::NotFound(image_id.to_string()))?;
+
+            let mut entry = Self::decrypt_metadata(key, *image_id, &encrypted_metadata)?;
+
+            // Remove old tag, add new tag if not already present
+            if let Some(pos) = entry.tags.iter().position(|t| t == &old_tag) {
+                entry.tags.remove(pos);
+                if !entry.tags.contains(&new_tag) {
+                    entry.tags.push(new_tag.clone());
+                }
+                self.store_entry_metadata(&entry, entries, key)?;
+                count += 1;
+            }
+        }
+
+        // Update tag index: remove old, merge into new
+        let old_ids = vault_data.tag_index.remove(&old_tag).unwrap_or_default();
+        vault_data
+            .tag_index
+            .entry(new_tag)
+            .or_default()
+            .extend(old_ids);
+
+        self.db.flush()?;
+        Ok(count)
     }
 
     /// Helper to clean up tag index when deleting an image.

@@ -69,10 +69,102 @@ input[type="text"], input[type="password"] {
 .app-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; }
 .app-header h2 { margin: 0; }
 .app-header .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.app-header .hamburger {
+    display: none;
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.3rem 0.5rem;
+    color: #333;
+    line-height: 1;
+}
+.app-header .hamburger:hover { background: #eee; border-radius: 6px; }
+
+@media (max-width: 600px) {
+    .app-header .hamburger { display: block; }
+    .app-header .actions {
+        display: none;
+        position: absolute;
+        top: 100%;
+        right: 0;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        flex-direction: column;
+        padding: 0.5rem;
+        z-index: 200;
+        min-width: 160px;
+    }
+    .app-header .actions.open { display: flex; }
+    .app-header .actions button { width: 100%; text-align: left; }
+    .app-header { position: relative; }
+}
 
 /* ===== Gallery ===== */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
 @media (min-width: 600px) { .grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; } }
+
+/* ===== Tools Dropdown ===== */
+.dropdown { position: relative; display: inline-block; }
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    min-width: 150px;
+    z-index: 210;
+    padding: 0.25rem;
+    flex-direction: column;
+}
+.dropdown-menu.open { display: flex; }
+.dropdown-menu button { width: 100%; text-align: left; background: transparent; color: #333; }
+.dropdown-menu button:hover { background: #f0f0f0; }
+
+@media (max-width: 600px) {
+    .app-header .actions .dropdown { width: 100%; }
+    .app-header .actions .dropdown > button { width: 100%; text-align: left; }
+    .dropdown-menu { position: static; box-shadow: none; padding: 0; padding-left: 0.75rem; }
+    .dropdown-menu.open { display: flex; }
+}
+
+/* ===== Bulk Tag =====*/
+.bulk-tags-display {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    min-height: 2rem;
+}
+.bulk-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    background: #333;
+    color: white;
+    padding: 0.6rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+}
+.bulk-banner .bulk-count { font-weight: 600; white-space: nowrap; }
+.bulk-banner .bulk-hint { font-size: 0.85rem; opacity: 0.6; margin-right: auto; }
+.bulk-cancel-btn {
+    background: transparent !important;
+    color: #ccc !important;
+    border: 1px solid #666 !important;
+}
+.bulk-cancel-btn:hover { background: #444 !important; color: white !important; }
+
+/* Bulk mode card states */
+.image-card.bulk-mode { cursor: pointer; position: relative; transition: opacity 0.15s, box-shadow 0.15s; }
+.image-card.bulk-mode img { pointer-events: none; }
+.image-card.bulk-selected { box-shadow: 0 0 0 3px #5cb85c; opacity: 1; }
+.image-card.bulk-dimmed { opacity: 0.35; }
+.image-card.bulk-mode:not(.bulk-selected):not(.bulk-dimmed) { opacity: 0.7; }
+.image-card.bulk-mode:hover { opacity: 1 !important; }
 
 .image-card { 
     background: white; 
@@ -218,6 +310,7 @@ input[type="text"], input[type="password"] {
     flex: 1;
     min-width: 200px;
     padding: 0.5rem 0.75rem;
+    padding-right: 2rem;
     border: 1px solid #ddd;
     border-radius: 4px;
     font-size: 0.9rem;
@@ -226,12 +319,17 @@ input[type="text"], input[type="password"] {
     outline: none;
     border-color: #888;
 }
+.search-input-wrapper {
+    position: relative;
+    flex: 1;
+    display: flex;
+}
 .tag-suggestions {
     display: none;
     position: absolute;
     top: 100%;
-    left: 0.75rem;
-    right: 0.75rem;
+    left: 0;
+    right: 0;
     background: white;
     border: 1px solid #ddd;
     border-radius: 4px;
@@ -295,4 +393,12 @@ input[type="text"], input[type="password"] {
     .info-label { color: #aaa; }
     button.secondary { color: #aaa; }
     button.secondary:hover { background: #444; }
+    .app-header .hamburger { color: #f4f4f4; }
+    .app-header .hamburger:hover { background: #444; }
+    .dropdown-menu { background: #2a2a2a; }
+    .dropdown-menu button { color: #f4f4f4; }
+    .dropdown-menu button:hover { background: #444; }
+    @media (max-width: 600px) {
+        .app-header .actions { background: #2a2a2a; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+    }
 }
