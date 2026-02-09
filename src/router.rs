@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::response::{Html, Redirect};
 use axum::routing::get;
 use tower_http::services::ServeDir;
@@ -18,6 +18,7 @@ pub fn get_router(state: AppState) -> Router {
         .with_state(state.clone())
         .nest("/api", get_api_router(state.clone()))
         .nest_service("/public", ServeDir::new("public"))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50 MB max for uploads
 }
 
 async fn index(State(state): State<AppState>, session: Session) -> Redirect {
