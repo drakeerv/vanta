@@ -80,9 +80,11 @@ async fn auth_middleware(
         return Err((StatusCode::UNAUTHORIZED, "Not authenticated".to_string()));
     }
 
-    let vault = state.vault.read().await;
-    if !vault.is_unlocked() {
-        return Err((StatusCode::FORBIDDEN, "Vault is locked".to_string()));
+    {
+        let vault = state.vault.read().await;
+        if !vault.is_unlocked() {
+            return Err((StatusCode::FORBIDDEN, "Vault is locked".to_string()));
+        }
     }
 
     Ok(next.run(request).await)
@@ -285,7 +287,7 @@ async fn delete_image(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let vault = state.vault.write().await;
+    let vault = state.vault.read().await;
 
     vault.delete_image(id).await.map_err(|e| match e {
         VaultError::NotFound(_) => (StatusCode::NOT_FOUND, "Image not found".to_string()),
