@@ -1,0 +1,20 @@
+services:
+  vanta:
+    image: ghcr.io/drakeerv/vanta:1e84c81
+    container_name: vanta
+    user: 1000:1000
+    userns_mode: keep-id
+    security_opt:
+      - label=disable
+    environment:
+      - TZ=America/New_York
+    volumes:
+      - ./vault:/app/vault:Z
+      - /mnt/nas/data/vanta:/app/vault/storage:Z
+    networks:
+      - proxy_net
+    restart: unless-stopped
+
+networks:
+  proxy_net:
+    external: true

@@ -21,14 +21,14 @@ FROM scratch
 WORKDIR /app
 
 # Copy the statically-linked binary
-COPY --from=builder /app/target/release/vanta /vanta
+COPY --from=builder /app/target/release/vanta .
 
 # Copy static assets and templates
-COPY public /public
-COPY templates /templates
+COPY public ./public
+COPY templates ./templates
 
 # Expose port
 EXPOSE 3000
 
 # Run the application
-ENTRYPOINT ["/vanta"]
+ENTRYPOINT ["./vanta"]
