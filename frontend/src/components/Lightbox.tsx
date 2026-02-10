@@ -30,7 +30,7 @@ export function Lightbox(props: {
                 <img
                   src={api.highResUrl(img().id)}
                   alt=""
-                  class="max-w-[95%] max-h-[calc(100vh-100px)] object-contain rounded"
+                  class="w-[95%] h-[calc(100vh-100px)] object-contain rounded"
                 />
 
                 <div class="fixed bottom-0 left-0 right-0 flex flex-wrap items-center justify-center gap-2 p-4">

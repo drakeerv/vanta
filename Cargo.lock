@@ -2276,6 +2276,7 @@ dependencies = [
  "parking_lot 0.12.5",
  "postcard",
  "rand 0.10.0",
+ "rayon",
  "secrecy",
  "serde",
  "serde_json",

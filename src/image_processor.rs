@@ -4,6 +4,7 @@ use image::{
     AnimationDecoder, DynamicImage, ImageError, ImageFormat,
     codecs::{gif::GifDecoder, webp::WebPDecoder},
 };
+use rayon::prelude::*;
 use std::io::Cursor;
 use thiserror::Error;
 use webp_animation::Encoder;
@@ -38,32 +39,45 @@ pub struct ProcessedImage {
 /// Processes an uploaded image: strips metadata, decodes, and generates multiple
 /// resolution variants (thumbnail, low, high in WebP + original in source format).
 pub fn process_upload(raw_data: &[u8], mime: &str) -> Result<ProcessedImage, ProcessingError> {
-    // Decode the image for generating resized variants
-    let src_image =
-        image::load_from_memory(&raw_data).map_err(|e| ProcessingError::Decode(e.to_string()))?;
-
     let mut variants = Vec::with_capacity(4);
 
     // Original: keep the raw bytes in whatever format the user uploaded
     variants.push((ImageVariant::Original, raw_data.to_vec()));
 
-    // Generate resized WebP variants at different quality tiers
-    for (variant, max_dim) in [
+    let is_animated = is_animated_image(mime, raw_data);
+
+    let (frames, src_image) = if is_animated {
+        (Some(extract_frames(mime, raw_data)?), None)
+    } else {
+        (
+            None,
+            Some(
+                image::load_from_memory(raw_data)
+                    .map_err(|e| ProcessingError::Decode(e.to_string()))?,
+            ),
+        )
+    };
+
+    // Generate resized WebP variants concurrently
+    let resized_results: Result<Vec<_>, ProcessingError> = [
         (ImageVariant::High, HIGH_MAX),
         (ImageVariant::Low, LOW_MAX),
         (ImageVariant::Thumbnail, THUMBNAIL_MAX),
-    ] {
-        if is_animated_image(mime, raw_data) {
-            // For animated images, we need to extract frames and resize each frame
-            let frames = extract_frames(mime, raw_data)?;
-            let webp_data = resize_animated_to_webp(frames, max_dim)?;
-            variants.push((variant, webp_data));
+    ]
+    .par_iter()
+    .map(|&(variant, max_dim)| {
+        let webp_data = if is_animated {
+            let frames_ref = frames.as_ref().unwrap();
+            resize_animated_to_webp(frames_ref, max_dim)?
         } else {
-            // For static images, resize and encode to WebP
-            let webp_data = fast_resize_to_webp(&src_image, max_dim)?;
-            variants.push((variant, webp_data));
-        }
-    }
+            let img_ref = src_image.as_ref().unwrap();
+            fast_resize_to_webp(img_ref, max_dim)?
+        };
+        Ok((variant, webp_data))
+    })
+    .collect();
+
+    variants.extend(resized_results?);
 
     Ok(ProcessedImage {
         original_mime: mime.to_string(),
@@ -176,7 +190,7 @@ fn extract_frames(mime: &str, data: &[u8]) -> Result<Vec<image::Frame>, Processi
 /// Resizes an animated image (e.g. GIF) to fit within `max_dim × max_dim` (preserving aspect ratio)
 /// and encodes the result as WebP. This is a fallback for formats that `fast_image_resize` doesn't support.
 fn resize_animated_to_webp(
-    frames: Vec<image::Frame>,
+    frames: &[image::Frame],
     max_dim: u32,
 ) -> Result<Vec<u8>, ProcessingError> {
     let mut encoder: Option<Encoder> = None;
@@ -187,7 +201,7 @@ fn resize_animated_to_webp(
         let delay = num / den;
 
         // Convert to DynamicImage for resizing
-        let img = DynamicImage::ImageRgba8(frame.into_buffer());
+        let img = DynamicImage::ImageRgba8(frame.buffer().clone());
         let (resized, (resized_width, resized_height)) = fast_resize(&img, max_dim)
             .map_err(|e| ProcessingError::Resize(e.to_string()))?;
 
