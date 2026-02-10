@@ -231,16 +231,12 @@ impl Vault {
 
         for result in entries.iter() {
             let (key_bytes, encrypted_metadata) = result?;
-            if let Ok(id) = Uuid::from_slice(&key_bytes) {
-                if let Ok(entry) = Self::decrypt_metadata(key, id, &encrypted_metadata) {
+            if let Ok(id) = Uuid::from_slice(&key_bytes)
+                && let Ok(entry) = Self::decrypt_metadata(key, id, &encrypted_metadata) {
                     for tag in &entry.tags {
-                        index
-                            .entry(tag.clone())
-                            .or_default()
-                            .insert(id);
+                        index.entry(tag.clone()).or_default().insert(id);
                     }
                 }
-            }
         }
 
         Ok(index)
@@ -257,7 +253,8 @@ impl Vault {
         let master_key = SecretBox::from(rand::random::<[u8; 32]>().to_vec());
 
         // Set up the vault encryption with the generated master key and user password
-        self.setup_vault_encryption(&master_key, master_password).await?;
+        self.setup_vault_encryption(&master_key, master_password)
+            .await?;
 
         Ok(())
     }
@@ -496,7 +493,13 @@ impl Vault {
             aad.extend_from_slice(variant.filename().as_bytes());
 
             let ciphertext = cipher
-                .encrypt(nonce, Payload { msg: data.as_slice(), aad: &aad })
+                .encrypt(
+                    nonce,
+                    Payload {
+                        msg: data.as_slice(),
+                        aad: &aad,
+                    },
+                )
                 .map_err(|_| VaultError::EncryptionError)?;
 
             let mut raw_file = nonce_bytes.to_vec();
@@ -548,9 +551,9 @@ impl Vault {
             return Err(VaultError::Corruption("Metadata too short".into()));
         }
         let (nonce_bytes, ciphertext) = data.split_at(24);
-        
-        let cipher = XChaCha20Poly1305::new_from_slice(key)
-            .map_err(|_| VaultError::EncryptionError)?;
+
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(key).map_err(|_| VaultError::EncryptionError)?;
 
         let decrypted = cipher
             .decrypt(
@@ -651,9 +654,7 @@ impl Vault {
                 .data
                 .write()
                 .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
-            let vault_data = data_lock
-                .as_mut()
-                .ok_or(VaultError::EncryptionError)?;
+            let vault_data = data_lock.as_mut().ok_or(VaultError::EncryptionError)?;
 
             let entries = &vault_data.entries;
 
@@ -714,10 +715,11 @@ impl Vault {
         let mut read_entries = Vec::new();
         for result in entries.iter() {
             let (key, value) = result?;
-            
+
             // The key is the UUID bytes
             if let Ok(id) = Uuid::from_slice(&key) {
-                match Self::decrypt_metadata(vault_data.encryption_key.expose_secret(), id, &value) {
+                match Self::decrypt_metadata(vault_data.encryption_key.expose_secret(), id, &value)
+                {
                     Ok(entry) => read_entries.push(entry),
                     Err(_) => continue, // Skip corrupted/invalid entries
                 }
@@ -743,7 +745,7 @@ impl Vault {
     /// Locks the database by clearing the loaded data from memory
     pub fn lock(&self) {
         if let Ok(mut data_lock) = self.data.write() {
-             *data_lock = None;
+            *data_lock = None;
         }
     }
 
@@ -758,32 +760,44 @@ impl Vault {
     /// Tags are lowercased, trimmed, and limited to 32 alphanumeric characters (plus hyphens/underscores).
     fn normalize_tag(tag: &str) -> Result<String, VaultError> {
         let normalized = tag.to_lowercase().trim().to_string();
-        
+
         if normalized.is_empty() {
             return Err(VaultError::Corruption("Tag cannot be empty".into()));
         }
-        
+
         if normalized.len() > 32 {
-            return Err(VaultError::Corruption("Tag cannot exceed 32 characters".into()));
+            return Err(VaultError::Corruption(
+                "Tag cannot exceed 32 characters".into(),
+            ));
         }
-        
+
         // Only allow alphanumeric, hyphens, and underscores
-        if !normalized.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-            return Err(VaultError::Corruption("Tag can only contain letters, numbers, hyphens, and underscores".into()));
+        if !normalized
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(VaultError::Corruption(
+                "Tag can only contain letters, numbers, hyphens, and underscores".into(),
+            ));
         }
-        
+
         Ok(normalized)
     }
 
     /// Helper to re-encrypt and store an updated ImageEntry
-    fn store_entry_metadata(&self, entry: &ImageEntry, entries: &Tree, key: &[u8]) -> Result<(), VaultError> {
+    fn store_entry_metadata(
+        &self,
+        entry: &ImageEntry,
+        entries: &Tree,
+        key: &[u8],
+    ) -> Result<(), VaultError> {
         let entry_bytes = postcard::to_stdvec(entry)?;
         let mut meta_nonce_bytes = [0u8; 24];
         rand::make_rng::<StdRng>().fill(&mut meta_nonce_bytes);
         let meta_nonce = XNonce::from_slice(&meta_nonce_bytes);
 
-        let cipher = XChaCha20Poly1305::new_from_slice(key)
-            .map_err(|_| VaultError::EncryptionError)?;
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(key).map_err(|_| VaultError::EncryptionError)?;
 
         let encrypted_metadata = cipher
             .encrypt(
@@ -815,9 +829,7 @@ impl Vault {
             .data
             .write()
             .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
-        let vault_data = data_lock
-            .as_mut()
-            .ok_or(VaultError::EncryptionError)?;
+        let vault_data = data_lock.as_mut().ok_or(VaultError::EncryptionError)?;
 
         let entries = &vault_data.entries;
         let key = vault_data.encryption_key.expose_secret();
@@ -834,7 +846,8 @@ impl Vault {
             self.store_entry_metadata(&entry, entries, key)?;
 
             // 2. Update the in-memory tag index
-            vault_data.tag_index
+            vault_data
+                .tag_index
                 .entry(tag)
                 .or_default()
                 .insert(image_id);
@@ -857,9 +870,7 @@ impl Vault {
             .data
             .write()
             .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
-        let vault_data = data_lock
-            .as_mut()
-            .ok_or(VaultError::EncryptionError)?;
+        let vault_data = data_lock.as_mut().ok_or(VaultError::EncryptionError)?;
 
         let entries = &vault_data.entries;
         let key = vault_data.encryption_key.expose_secret();
@@ -923,10 +934,7 @@ impl Vault {
         let mut tag_sets: Vec<(String, HashSet<Uuid>)> = Vec::new();
         for tag in include_tags {
             let normalized = Self::normalize_tag(tag)?;
-            let ids: HashSet<Uuid> = tag_index
-                .get(&normalized)
-                .cloned()
-                .unwrap_or_default();
+            let ids: HashSet<Uuid> = tag_index.get(&normalized).cloned().unwrap_or_default();
             if ids.is_empty() {
                 return Ok(Vec::new()); // Tag doesn't exist, no matches
             }
@@ -971,11 +979,10 @@ impl Vault {
         // Fetch entries
         let mut results = Vec::new();
         for id in candidate_ids {
-            if let Some(encrypted_metadata) = entries.get(id.as_bytes())? {
-                if let Ok(entry) = Self::decrypt_metadata(key, id, &encrypted_metadata) {
+            if let Some(encrypted_metadata) = entries.get(id.as_bytes())?
+                && let Ok(entry) = Self::decrypt_metadata(key, id, &encrypted_metadata) {
                     results.push(entry);
                 }
-            }
         }
 
         // Sort by created_at descending for consistent ordering
@@ -1023,9 +1030,7 @@ impl Vault {
             .data
             .write()
             .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
-        let vault_data = data_lock
-            .as_mut()
-            .ok_or(VaultError::EncryptionError)?;
+        let vault_data = data_lock.as_mut().ok_or(VaultError::EncryptionError)?;
 
         let entries = &vault_data.entries;
         let key = vault_data.encryption_key.expose_secret();

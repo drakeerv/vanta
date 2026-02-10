@@ -14,7 +14,13 @@ use crate::{
     vault::{ImageVariant, VaultError},
 };
 
-const ALLOWED_IMAGE_TYPES: &[&str] = &["image/jpeg", "image/png", "image/avif", "image/webp", "image/gif"];
+const ALLOWED_IMAGE_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/avif",
+    "image/webp",
+    "image/gif",
+];
 
 use serde::Deserialize;
 
@@ -146,15 +152,12 @@ async fn setup_vault(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    session
-        .insert("authenticated", true)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create session".to_string(),
-            )
-        })?;
+    session.insert("authenticated", true).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to create session".to_string(),
+        )
+    })?;
 
     Ok((StatusCode::CREATED, "Vault initialized and unlocked"))
 }
@@ -176,15 +179,12 @@ async fn unlock_vault(
             .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
     }
 
-    session
-        .insert("authenticated", true)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create session".to_string(),
-            )
-        })?;
+    session.insert("authenticated", true).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to create session".to_string(),
+        )
+    })?;
 
     Ok("Vault unlocked")
 }
@@ -199,7 +199,7 @@ async fn list_images(
         // Parse query: words prefixed with - are exclusions
         let mut include_tags = Vec::new();
         let mut exclude_tags = Vec::new();
-        
+
         for term in query.split_whitespace() {
             let term = term.trim();
             if term.is_empty() {
@@ -213,7 +213,7 @@ async fn list_images(
                 include_tags.push(term.to_string());
             }
         }
-        
+
         vault.search_by_tags(&include_tags, &exclude_tags)
     } else {
         vault.list_images()
@@ -267,15 +267,20 @@ async fn get_image(
     State(state): State<AppState>,
     axum::extract::Path((id, variant_name)): axum::extract::Path<(uuid::Uuid, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let variant = ImageVariant::from_name(&variant_name)
-        .ok_or((StatusCode::BAD_REQUEST, format!("Invalid variant: {variant_name}")))?;
+    let variant = ImageVariant::from_name(&variant_name).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!("Invalid variant: {variant_name}"),
+    ))?;
 
     let vault = state.vault.read().await;
 
-    let (data, mime) = vault.retrieve_image(id, variant).await.map_err(|e| match e {
-        VaultError::NotFound(_) => (StatusCode::NOT_FOUND, "Image not found".to_string()),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    })?;
+    let (data, mime) = vault
+        .retrieve_image(id, variant)
+        .await
+        .map_err(|e| match e {
+            VaultError::NotFound(_) => (StatusCode::NOT_FOUND, "Image not found".to_string()),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        })?;
 
     // Vault images are immutable once stored so we can cache them aggressively
     Ok((

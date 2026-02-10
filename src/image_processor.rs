@@ -149,10 +149,7 @@ fn fast_resize(src: &DynamicImage, max_dim: u32) -> Result<(Vec<u8>, (u32, u32))
 /// Resizes an image to fit within `max_dim × max_dim` (preserving aspect ratio)
 /// and encodes the result as WebP. If the source is already smaller than `max_dim`,
 /// it is encoded to WebP at its original resolution (no upscaling).
-fn fast_resize_to_webp(
-    src: &DynamicImage,
-    max_dim: u32,
-) -> Result<Vec<u8>, ProcessingError> {
+fn fast_resize_to_webp(src: &DynamicImage, max_dim: u32) -> Result<Vec<u8>, ProcessingError> {
     let (buffer, (dst_width, dst_height)) = fast_resize(src, max_dim)?;
     let result = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(dst_width, dst_height, buffer)
         .ok_or_else(|| ProcessingError::Resize("Failed to create result buffer".to_string()))?;
@@ -202,8 +199,8 @@ fn resize_animated_to_webp(
 
         // Convert to DynamicImage for resizing
         let img = DynamicImage::ImageRgba8(frame.buffer().clone());
-        let (resized, (resized_width, resized_height)) = fast_resize(&img, max_dim)
-            .map_err(|e| ProcessingError::Resize(e.to_string()))?;
+        let (resized, (resized_width, resized_height)) =
+            fast_resize(&img, max_dim).map_err(|e| ProcessingError::Resize(e.to_string()))?;
 
         if encoder.is_none() {
             encoder = Some(

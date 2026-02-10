@@ -6,9 +6,9 @@ mod vault;
 
 use app_state::AppState;
 use std::env;
-use tokio::{net::TcpListener, signal};
-use tower_sessions::{MemoryStore, SessionManagerLayer, Expiry};
 use time::Duration;
+use tokio::{net::TcpListener, signal};
+use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -54,8 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_secure(false) // For local development. Set to true in prod with HTTPS
         .with_expiry(Expiry::OnInactivity(Duration::minutes(30)));
 
-    let router = router::get_router(state.clone())
-        .layer(session_layer);
+    let router = router::get_router(state.clone()).layer(session_layer);
 
     let listener = match TcpListener::bind(&addr).await {
         Ok(listener) => listener,
