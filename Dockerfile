@@ -12,7 +12,7 @@ RUN bun run build
 # ── Backend build ────────────────────────────────────────────
 FROM rust:1.92-alpine AS builder
 
-RUN apk add --no-cache musl-dev
+RUN apk add --no-cache musl-dev nasm
 
 WORKDIR /app
 
