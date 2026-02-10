@@ -14,7 +14,7 @@ use crate::{
     vault::{ImageVariant, VaultError},
 };
 
-const ALLOWED_IMAGE_TYPES: &[&str] = &["image/jpeg", "image/png", "image/webp"];
+const ALLOWED_IMAGE_TYPES: &[&str] = &["image/jpeg", "image/png", "image/avif", "image/webp", "image/gif"];
 
 use serde::Deserialize;
 

@@ -2,7 +2,6 @@ mod api;
 mod app_state;
 mod image_processor;
 mod router;
-mod templates;
 mod vault;
 
 use app_state::AppState;

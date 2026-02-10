@@ -1,3 +1,15 @@
+# ── Frontend build ───────────────────────────────────────────
+FROM oven/bun:1-alpine AS frontend
+
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/bun.lock* ./
+RUN bun install --frozen-lockfile
+
+COPY frontend/ ./
+RUN bun run build
+
+# ── Backend build ────────────────────────────────────────────
 FROM rust:1.92-alpine AS builder
 
 RUN apk add --no-cache musl-dev
@@ -15,7 +27,7 @@ RUN cargo build --release && rm -rf src target/release/deps/vanta*
 COPY src ./src
 RUN cargo build --release --locked
 
-# Runtime stage - scratch for minimal size (~15MB total)
+# ── Runtime stage ────────────────────────────────────────────
 FROM scratch
 
 WORKDIR /app
@@ -23,9 +35,8 @@ WORKDIR /app
 # Copy the statically-linked binary
 COPY --from=builder /app/target/release/vanta .
 
-# Copy static assets and templates
-COPY public ./public
-COPY templates ./templates
+# Copy the built SPA
+COPY --from=frontend /app/frontend/dist ./frontend/dist
 
 # Expose port
 EXPOSE 3000
