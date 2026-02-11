@@ -1,30 +1,30 @@
 mod crypto;
+mod db;
 mod error;
 mod types;
 
 pub use error::VaultError;
 pub use types::{ImageEntry, ImageVariant};
 
+use crate::vault::db::Database;
 use crate::vault::types::VaultMetadata;
+use rayon::prelude::*;
 use secrecy::{ExposeSecret, SecretBox};
-use sled::{Config, Db, Tree};
 use std::{
     collections::{HashMap, HashSet},
-    str::from_utf8,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::fs;
 use uuid::Uuid;
 
-const CURRENT_VAULT_VERSION: u32 = 1;
 const DATABASE_DIR: &str = "vault/db";
 const DATA_DIR: &str = "vault/storage";
 const SALT_PATH: &str = "vault/.salt";
 
 #[derive(Clone)]
 struct VaultData {
-    entries: Tree,
+    // We keep the tag index in memory
     tag_index: HashMap<String, HashSet<Uuid>>,
     encryption_key: SecretBox<[u8]>,
 }
@@ -32,17 +32,23 @@ struct VaultData {
 #[derive(Clone)]
 pub struct Vault {
     metadata: VaultMetadata,
+    // Database handle is thread-safe and can be held outside the lock
+    db: Database,
+    // Only mutable in-memory state needs the lock
     data: Arc<RwLock<Option<VaultData>>>,
-    db: Db,
 }
 
 impl Vault {
     pub fn new() -> Result<Self, VaultError> {
-        let config = Config::new().path(DATABASE_DIR);
-        let db = config.open()?;
-        let vault = Self::load_metadata(&db)?;
+        let db = Database::open(DATABASE_DIR)?;
+        let metadata = db.load_or_init_metadata()?;
         std::fs::create_dir_all(DATA_DIR)?;
-        Ok(vault)
+
+        Ok(Vault {
+            metadata,
+            db,
+            data: Arc::new(RwLock::new(None)),
+        })
     }
 
     // --- Core Lifecycle ---
@@ -61,23 +67,22 @@ impl Vault {
 
         let wrapping_key = crypto::derive_key(password, salt)?;
 
-        // Decrypt the master key
+        // Decrypt master key
         let master_key_bytes = crypto::decrypt(wrapping_key.expose_secret(), check_val, &[])?;
         if master_key_bytes.len() != 32 {
             return Err(VaultError::EncryptionError);
         }
         let master_key = SecretBox::from(master_key_bytes);
 
-        // Load DB Tree
-        let entries = self.db.open_tree("entries")?;
-        let tag_index = Self::build_tag_index(&entries, master_key.expose_secret())?;
+        // Load all entries to build the tag index
+        let all_entries = self.db.get_all_entries(master_key.expose_secret())?;
+        let tag_index = Self::build_tag_index(&all_entries);
 
         let mut lock = self
             .data
             .write()
             .map_err(|_| VaultError::Corruption("Lock poisoned".into()))?;
         *lock = Some(VaultData {
-            entries,
             tag_index,
             encryption_key: master_key,
         });
@@ -99,7 +104,6 @@ impl Vault {
 
         let wrapping_key = crypto::derive_key(password, salt)?;
         crypto::decrypt(wrapping_key.expose_secret(), check_val, &[])?;
-
         Ok(())
     }
 
@@ -136,14 +140,13 @@ impl Vault {
             &[],
         )?;
 
-        // Update DB
-        self.db.insert("vault_salt", &salt)?;
-        // FIX: Remove & so it implements Into<IVec>
-        self.db.insert("master_key_check", key_check.clone())?;
-        self.db.flush()?;
+        // DB Operations
+        self.db.save_salt_and_check(&salt, &key_check)?;
 
-        // Update FS and InMemory
+        // File System Operations
         fs::write(SALT_PATH, &salt).await?;
+
+        // Update Local State
         self.metadata.vault_salt = Some(salt);
         self.metadata.master_key_check = Some(key_check);
 
@@ -162,41 +165,38 @@ impl Vault {
         size: u64,
         variants: Vec<(ImageVariant, Vec<u8>)>,
     ) -> Result<ImageEntry, VaultError> {
-        self.with_data(|data| {
+        // 1. Prepare data (synchronous part)
+        let (id, key, entry) = self.with_data(|data| {
             let id = Uuid::new_v4();
-            let key = data.encryption_key.expose_secret();
-            Ok((id, key.to_vec(), data.entries.clone()))
-        })
-        .and_then(|(id, key, entries)| {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-                    let dir_path = format!("{}/{}", DATA_DIR, id);
-                    fs::create_dir_all(&dir_path).await?;
+            let key = data.encryption_key.expose_secret().to_vec();
 
-                    let mut stored_variants = Vec::new();
+            let entry = ImageEntry {
+                id,
+                original_mime: original_mime.clone(),
+                original_size: size,
+                created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+                variants: variants.iter().map(|(v, _)| *v).collect(),
+                tags: Vec::new(),
+            };
+            Ok((id, key, entry))
+        })?;
 
-                    for (variant, bytes) in &variants {
-                        let aad = Self::make_aad(id, variant.filename());
-                        let encrypted = crypto::encrypt(&key, bytes, &aad)?;
-                        let path = format!("{}/{}.enc", dir_path, variant.filename());
-                        fs::write(&path, encrypted).await?;
-                        stored_variants.push(*variant);
-                    }
+        // 2. Perform IO (File system + DB)
+        // We do this outside the read lock so we don't block other readers during IO
+        let dir_path = format!("{}/{}", DATA_DIR, id);
+        fs::create_dir_all(&dir_path).await?;
 
-                    let entry = ImageEntry {
-                        id,
-                        original_mime,
-                        original_size: size,
-                        created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-                        variants: stored_variants,
-                        tags: Vec::new(),
-                    };
+        for (variant, bytes) in &variants {
+            let aad = Self::make_aad(id, variant.filename());
+            let encrypted = crypto::encrypt(&key, bytes, &aad)?;
+            let path = format!("{}/{}.enc", dir_path, variant.filename());
+            fs::write(&path, encrypted).await?;
+        }
 
-                    Self::save_entry(&entries, &key, &entry)?;
-                    Ok(entry)
-                })
-            })
-        })
+        // Save metadata to DB
+        self.db.insert_entry(&key, &entry)?;
+
+        Ok(entry)
     }
 
     pub async fn retrieve_image(
@@ -204,17 +204,18 @@ impl Vault {
         id: Uuid,
         variant: ImageVariant,
     ) -> Result<(Vec<u8>, String), VaultError> {
+        // 1. Get Key and Metadata
         let (key_vec, mime) = self.with_data(|data| {
             let key = data.encryption_key.expose_secret();
-            let entry = Self::get_entry(&data.entries, key, id)?;
+            let entry = self.db.get_entry(key, id)?;
+
             if !entry.variants.contains(&variant) {
                 return Err(VaultError::NotFound(format!("Variant missing: {}", id)));
             }
-            // FIX: clone mime before returning to avoid partial move issues
-            let m = entry.original_mime.clone();
-            Ok((key.to_vec(), m))
+            Ok((key.to_vec(), entry.original_mime))
         })?;
 
+        // 2. Read File
         let path = format!("{}/{}/{}.enc", DATA_DIR, id, variant.filename());
         let encrypted_data = fs::read(&path).await?;
 
@@ -225,11 +226,10 @@ impl Vault {
     }
 
     pub async fn delete_image(&self, id: Uuid) -> Result<(), VaultError> {
+        // 1. Update Index and DB
         self.with_data_mut(|data| {
-            let key = data.encryption_key.expose_secret();
-
-            // Cleanup Index
-            if let Ok(entry) = Self::get_entry(&data.entries, key, id) {
+            // We need to read the entry first to know which tags to clean up
+            if let Ok(entry) = self.db.get_entry(data.encryption_key.expose_secret(), id) {
                 for tag in entry.tags {
                     if let Some(set) = data.tag_index.get_mut(&tag) {
                         set.remove(&id);
@@ -239,10 +239,11 @@ impl Vault {
                     }
                 }
             }
-            data.entries.remove(id.as_bytes())?;
+            self.db.remove_entry(id)?;
             Ok(())
         })?;
 
+        // 2. Delete Files
         let dir = format!("{}/{}", DATA_DIR, id);
         if let Err(e) = fs::remove_dir_all(dir).await {
             if e.kind() != std::io::ErrorKind::NotFound {
@@ -259,11 +260,11 @@ impl Vault {
 
         self.with_data_mut(|data| {
             let key = data.encryption_key.expose_secret();
-            let mut entry = Self::get_entry(&data.entries, key, id)?;
+            let mut entry = self.db.get_entry(key, id)?;
 
             if !entry.tags.contains(&tag) {
                 entry.tags.push(tag.clone());
-                Self::save_entry(&data.entries, key, &entry)?;
+                self.db.insert_entry(key, &entry)?;
                 data.tag_index.entry(tag).or_default().insert(id);
             }
             Ok(entry)
@@ -275,11 +276,11 @@ impl Vault {
 
         self.with_data_mut(|data| {
             let key = data.encryption_key.expose_secret();
-            let mut entry = Self::get_entry(&data.entries, key, id)?;
+            let mut entry = self.db.get_entry(key, id)?;
 
             if let Some(pos) = entry.tags.iter().position(|t| t == &tag) {
                 entry.tags.remove(pos);
-                Self::save_entry(&data.entries, key, &entry)?;
+                self.db.insert_entry(key, &entry)?;
 
                 if let Some(set) = data.tag_index.get_mut(&tag) {
                     set.remove(&id);
@@ -316,19 +317,20 @@ impl Vault {
             let mut count = 0;
 
             for id in &image_ids {
-                if let Ok(mut entry) = Self::get_entry(&data.entries, key, *id) {
+                // We use get_entry from DB
+                if let Ok(mut entry) = self.db.get_entry(key, *id) {
                     if let Some(pos) = entry.tags.iter().position(|t| t == &old_tag) {
                         entry.tags.remove(pos);
                         if !entry.tags.contains(&new_tag) {
                             entry.tags.push(new_tag.clone());
                         }
-                        Self::save_entry(&data.entries, key, &entry)?;
+                        self.db.insert_entry(key, &entry)?;
                         count += 1;
                     }
                 }
             }
 
-            // Update Index
+            // Update Memory Index
             if let Some(old_ids) = data.tag_index.remove(&old_tag) {
                 data.tag_index.entry(new_tag).or_default().extend(old_ids);
             }
@@ -337,21 +339,10 @@ impl Vault {
         })
     }
 
+    // --- Search/List ---
+
     pub fn list_images(&self) -> Result<Vec<ImageEntry>, VaultError> {
-        self.with_data(|data| {
-            let key = data.encryption_key.expose_secret();
-            let mut list = Vec::new();
-            for res in data.entries.iter() {
-                let (k, v) = res?;
-                if let Ok(id) = Uuid::from_slice(&k) {
-                    if let Ok(entry) = Self::decrypt_entry_bytes(key, id, &v) {
-                        list.push(entry);
-                    }
-                }
-            }
-            list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            Ok(list)
-        })
+        self.with_data(|data| self.db.get_all_entries(data.encryption_key.expose_secret()))
     }
 
     pub fn search_by_tags(
@@ -364,7 +355,6 @@ impl Vault {
         }
 
         self.with_data(|data| {
-            // FIX: Unroll map to handle ? safely
             let mut sets = Vec::new();
             for t in include {
                 let normalized = ImageEntry::normalize_tag(t)?;
@@ -372,12 +362,13 @@ impl Vault {
                 sets.push(set);
             }
 
+            // Filter logic (same as before)
             let mut candidates = if include.is_empty() {
-                data.entries
-                    .iter()
-                    .filter_map(|r| r.ok())
-                    .filter_map(|(k, _)| Uuid::from_slice(&k).ok())
-                    .collect::<HashSet<_>>()
+                // If we have to search all, we fetch all from DB first
+                let all = self
+                    .db
+                    .get_all_entries(data.encryption_key.expose_secret())?;
+                all.into_iter().map(|e| e.id).collect::<HashSet<_>>()
             } else {
                 sets.sort_by_key(|s| s.len());
                 if sets[0].is_empty() {
@@ -401,14 +392,17 @@ impl Vault {
                 }
             }
 
+            // Fetch specific entries
             let key = data.encryption_key.expose_secret();
-            let mut entries = Vec::new();
-            for id in candidates {
-                if let Ok(entry) = Self::get_entry(&data.entries, key, id) {
-                    entries.push(entry);
-                }
-            }
-            entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            let candidate_list: Vec<Uuid> = candidates.into_iter().collect();
+            let mut entries: Vec<ImageEntry> = candidate_list
+                .par_iter()
+                .filter_map(|&id| {
+                    self.db.get_entry(key, id).ok()
+                })
+                .collect();
+
+            entries.par_sort_unstable_by(|a, b| b.created_at.cmp(&a.created_at));
             Ok(entries)
         })
     }
@@ -457,90 +451,16 @@ impl Vault {
         aad
     }
 
-    fn get_entry(tree: &Tree, key: &[u8], id: Uuid) -> Result<ImageEntry, VaultError> {
-        let bytes = tree
-            .get(id.as_bytes())?
-            .ok_or_else(|| VaultError::NotFound(id.to_string()))?;
-        Self::decrypt_entry_bytes(key, id, &bytes)
-    }
-
-    fn decrypt_entry_bytes(key: &[u8], id: Uuid, bytes: &[u8]) -> Result<ImageEntry, VaultError> {
-        let decrypted = crypto::decrypt(key, bytes, id.as_bytes())?;
-        Ok(postcard::from_bytes(&decrypted)?)
-    }
-
-    fn save_entry(tree: &Tree, key: &[u8], entry: &ImageEntry) -> Result<(), VaultError> {
-        let bytes = postcard::to_stdvec(entry)?;
-        let encrypted = crypto::encrypt(key, &bytes, entry.id.as_bytes())?;
-        tree.insert(entry.id.as_bytes(), encrypted)?;
-        Ok(())
-    }
-
-    fn build_tag_index(
-        entries: &Tree,
-        key: &[u8],
-    ) -> Result<HashMap<String, HashSet<Uuid>>, VaultError> {
+    fn build_tag_index(entries: &[ImageEntry]) -> HashMap<String, HashSet<Uuid>> {
         let mut index = HashMap::new();
-        for res in entries.iter() {
-            let (k, v) = res?;
-            if let Ok(id) = Uuid::from_slice(&k) {
-                if let Ok(entry) = Self::decrypt_entry_bytes(key, id, &v) {
-                    for tag in entry.tags {
-                        index.entry(tag).or_insert_with(HashSet::new).insert(id);
-                    }
-                }
+        for entry in entries {
+            for tag in &entry.tags {
+                index
+                    .entry(tag.clone())
+                    .or_insert_with(HashSet::new)
+                    .insert(entry.id);
             }
         }
-        Ok(index)
-    }
-
-    fn load_metadata(db: &Db) -> Result<Self, VaultError> {
-        let meta = match db.get("vault_version")? {
-            Some(v) => {
-                let ver = from_utf8(&v)?.parse::<u32>()?;
-                if ver != CURRENT_VAULT_VERSION {
-                    return Err(VaultError::InvalidVersion {
-                        expected: CURRENT_VAULT_VERSION,
-                        found: ver,
-                    });
-                }
-
-                // Read created_at safely
-                let created_at_bytes = db
-                    .get("created_at")?
-                    .ok_or(VaultError::Corruption("No date".into()))?;
-                let created_at_str = from_utf8(&created_at_bytes)?;
-                let created_at = created_at_str.parse::<u64>()?;
-
-                VaultMetadata {
-                    vault_version: ver,
-                    created_at,
-                    vault_salt: db
-                        .get("vault_salt")?
-                        .and_then(|x| x.as_ref().try_into().ok()),
-                    master_key_check: db.get("master_key_check")?.map(|x| x.to_vec()),
-                }
-            }
-            None => {
-                let ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-                db.insert(
-                    "vault_version",
-                    CURRENT_VAULT_VERSION.to_string().as_bytes(),
-                )?;
-                db.insert("created_at", ts.to_string().as_bytes())?;
-                db.flush()?;
-                VaultMetadata {
-                    vault_version: CURRENT_VAULT_VERSION,
-                    created_at: ts,
-                    vault_salt: None,
-                    master_key_check: None,
-                }
-            }
-        };
-        Ok(Vault {
-            metadata: meta,
-            data: Arc::new(RwLock::new(None)),
-            db: db.clone(),
-        })
+        index
     }
 }

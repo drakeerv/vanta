@@ -38,19 +38,23 @@ pub fn derive_key(password: &str, salt: &[u8; 16]) -> Result<SecretBox<[u8]>, Va
 /// Encrypts data, prepending the 24-byte nonce to the output.
 pub fn encrypt(key: &[u8], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, VaultError> {
     let cipher = XChaCha20Poly1305::new_from_slice(key).map_err(|_| VaultError::EncryptionError)?;
-
+    
     let mut nonce_bytes = [0u8; 24];
     rand::make_rng::<StdRng>().fill(&mut nonce_bytes);
     let nonce = XNonce::from_slice(&nonce_bytes);
-
+    
     let ciphertext = cipher
         .encrypt(nonce, Payload { msg: data, aad })
         .map_err(|_| VaultError::EncryptionError)?;
 
-    let mut combined = nonce_bytes.to_vec();
+    // Allocate exactly what we need: 24 bytes (Nonce) + Ciphertext length
+    let mut combined = Vec::with_capacity(24 + ciphertext.len());
+    combined.extend_from_slice(&nonce_bytes);
     combined.extend_from_slice(&ciphertext);
+    
     Ok(combined)
 }
+
 
 /// Decrypts data that has a 24-byte nonce prepended.
 pub fn decrypt(key: &[u8], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, VaultError> {
