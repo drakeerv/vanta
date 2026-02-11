@@ -541,7 +541,6 @@ impl Vault {
         stored_metadata.extend_from_slice(&encrypted_metadata);
 
         entries.insert(id.as_bytes(), stored_metadata)?;
-        entries.flush()?;
 
         Ok(entry)
     }
@@ -675,7 +674,6 @@ impl Vault {
 
             // Remove metadata from sled
             entries.remove(id.as_bytes())?;
-            entries.flush()?;
         } // Lock is dropped here, so we don't hold it across the await below
 
         // Remove the entire UUID directory and all variant files
@@ -853,7 +851,6 @@ impl Vault {
                 .insert(image_id);
         }
 
-        self.db.flush()?;
         Ok(entry)
     }
 
@@ -895,7 +892,6 @@ impl Vault {
             }
         }
 
-        self.db.flush()?;
         Ok(entry)
     }
 
@@ -1076,7 +1072,6 @@ impl Vault {
             .or_default()
             .extend(old_ids);
 
-        self.db.flush()?;
         Ok(count)
     }
 
