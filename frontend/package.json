@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@kobalte/core": "^0.13.11",
+    "panzoom": "^9.4.3",
     "solid-js": "^1.9.0"
   },
   "devDependencies": {

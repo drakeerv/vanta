@@ -1,5 +1,6 @@
-import { Show, For } from "solid-js";
+import { Show, For, onMount, onCleanup } from "solid-js";
 import { Dialog } from "@kobalte/core/dialog";
+import panzoom from "panzoom";
 import type { ImageEntry } from "../api";
 import * as api from "../api";
 
@@ -15,7 +16,7 @@ export function Lightbox(props: {
       <Dialog.Portal>
         <Dialog.Overlay class="fixed inset-0 z-40 bg-black/95" />
         <Dialog.Content
-          class="fixed inset-0 z-40 flex flex-col items-center justify-center p-4 outline-none text-white"
+          class="fixed inset-0 z-40 flex flex-col items-center justify-center outline-none text-white"
           onClick={(e: MouseEvent) => { if (e.target === e.currentTarget) props.onClose(); }}
         >
           <Dialog.Title class="sr-only">Image viewer</Dialog.Title>
@@ -27,11 +28,7 @@ export function Lightbox(props: {
           <Show when={props.image}>
             {(img) => (
               <>
-                <img
-                  src={api.highResUrl(img().id)}
-                  alt=""
-                  class="w-[95%] h-[calc(100vh-100px)] object-contain rounded"
-                />
+                <ZoomableImage src={api.highResUrl(img().id)} />
 
                 <div class="fixed bottom-0 left-0 right-0 flex flex-wrap items-center justify-center gap-2 p-4">
                   <div class="flex gap-1.5 flex-wrap mr-auto">
@@ -76,5 +73,35 @@ function LbButton(props: { onClick: () => void; children: any }) {
     >
       {props.children}
     </button>
+  );
+}
+
+function ZoomableImage(props: { src: string }) {
+  let ref: HTMLImageElement | undefined;
+
+  onMount(() => {
+    if (!ref) return;
+    // We need to wait for the image to load to know its dimensions for bounds?
+    // panzoom handles it usually.
+    const pz = panzoom(ref, {
+      maxZoom: 5,
+      minZoom: 0.5,
+      bounds: true,
+      boundsPadding: 0.1,
+    });
+    
+    // Enable touch action for the element specifically for panzoom
+    ref.style.touchAction = "none";
+
+    onCleanup(() => pz.dispose());
+  });
+
+  return (
+    <img
+      ref={ref}
+      src={props.src}
+      alt=""
+      class="w-full h-full object-contain"
+    />
   );
 }
