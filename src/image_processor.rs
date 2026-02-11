@@ -4,6 +4,7 @@ use image::{
     AnimationDecoder, DynamicImage, ImageError, ImageFormat,
     codecs::{gif::GifDecoder, webp::WebPDecoder},
 };
+use jxl_oxide::integration::JxlDecoder;
 use rayon::prelude::*;
 use std::io::Cursor;
 use thiserror::Error;
@@ -51,10 +52,7 @@ pub fn process_upload(raw_data: &[u8], mime: &str) -> Result<ProcessedImage, Pro
     } else {
         (
             None,
-            Some(
-                image::load_from_memory(raw_data)
-                    .map_err(|e| ProcessingError::Decode(e.to_string()))?,
-            ),
+            Some(decode_image(raw_data, mime)?),
         )
     };
 
@@ -84,6 +82,25 @@ pub fn process_upload(raw_data: &[u8], mime: &str) -> Result<ProcessedImage, Pro
         original_size: raw_data.len() as u64,
         variants,
     })
+}
+
+/// Decode image from raw bytes, handling JXL specially
+fn decode_image(data: &[u8], mime: &str) -> Result<DynamicImage, ProcessingError> {
+    match mime {
+        "image/jxl" => {
+            // Decode JXL using jxl-oxide decoder
+            let decoder = JxlDecoder::new(Cursor::new(data))
+                .map_err(|e| ProcessingError::Decode(format!("JXL decode error: {}", e)))?;
+            
+            DynamicImage::from_decoder(decoder)
+                .map_err(|e| ProcessingError::Decode(format!("JXL image conversion error: {}", e)))
+        }
+        _ => {
+            // Use standard image crate decoding for other formats
+            image::load_from_memory(data)
+                .map_err(|e| ProcessingError::Decode(e.to_string()))
+        }
+    }
 }
 
 /// Detects if the image contains animation based on its MIME type and then image data.
