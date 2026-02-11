@@ -20,6 +20,7 @@ const ALLOWED_IMAGE_TYPES: &[&str] = &[
     "image/avif",
     "image/webp",
     "image/gif",
+    "image/jxl",
 ];
 
 use serde::Deserialize;

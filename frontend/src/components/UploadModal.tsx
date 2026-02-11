@@ -80,13 +80,13 @@ export function UploadModal(props: {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/avif,image/webp,image/gif"
+          accept="image/jpeg,image/png,image/avif,image/webp,image/gif,image/jxl"
           multiple
           class="hidden"
           onChange={(e) => { if (e.currentTarget.files?.length) setFiles(e.currentTarget.files); }}
         />
         <p class="text-gray-500 dark:text-gray-400">Drag & drop images here or click to browse</p>
-        <p class="text-xs text-gray-400 mt-1">Supports JPEG, PNG, AVIF, WebP, GIF (max 50 MB each)</p>
+        <p class="text-xs text-gray-400 mt-1">Supports JPEG, PNG, AVIF, WebP, GIF, JXL (max 50 MB each)</p>
       </div>
 
       <Show when={files()}>

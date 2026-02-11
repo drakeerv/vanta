@@ -4,6 +4,7 @@ use image::{
     AnimationDecoder, DynamicImage, ImageError, ImageFormat,
     codecs::{gif::GifDecoder, webp::WebPDecoder},
 };
+use jxl_oxide::integration::JxlDecoder;
 use rayon::prelude::*;
 use std::io::Cursor;
 use thiserror::Error;
@@ -48,6 +49,11 @@ pub fn process_upload(raw_data: &[u8], mime: &str) -> Result<ProcessedImage, Pro
 
     let (frames, src_image) = if is_animated {
         (Some(extract_frames(mime, raw_data)?), None)
+    } else if mime == "image/jxl" {
+        (
+            None,
+            Some(decode_jxl(raw_data)?),
+        )
     } else {
         (
             None,
@@ -223,4 +229,11 @@ fn resize_animated_to_webp(
         .map_err(|e| ProcessingError::Encode(e.to_string()))?
         .to_vec();
     Ok(webp_data)
+}
+
+fn decode_jxl(data: &[u8]) -> Result<DynamicImage, ProcessingError> {
+    let decoder = JxlDecoder::new(Cursor::new(data))
+        .map_err(|e| ProcessingError::Decode(e.to_string()))?;
+
+    DynamicImage::from_decoder(decoder).map_err(|e| ProcessingError::Decode(e.to_string()))
 }
