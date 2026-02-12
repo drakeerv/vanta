@@ -25,7 +25,7 @@ export function Modal(props: {
           <div class="flex min-h-full items-center justify-center p-4 text-center">
             <KDialog.Content 
               class={`
-                w-full ${maxW()} transform overflow-hidden rounded-2xl 
+                w-full ${maxW()} transform rounded-2xl 
                 bg-white dark:bg-gray-900 text-left align-middle shadow-xl transition-all
                 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-800
               `}

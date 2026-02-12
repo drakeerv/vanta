@@ -63,13 +63,21 @@ export function Lightbox(props: {
                 >
                   {/* Tags Section */}
                   <div class="flex gap-1.5 flex-wrap justify-center sm:justify-start">
-                    <For each={img().tags}>
+                    <For each={img().tags.slice(0, 3)}>
                       {(tag) => (
                         <span class="px-2 py-0.5 bg-white/15 text-white rounded text-[10px] uppercase tracking-wider flex items-center gap-1">
                           <Tag size={10} /> {tag}
                         </span>
                       )}
                     </For>
+                    <Show when={img().tags.length > 3}>
+                      <button 
+                        onClick={props.onTag}
+                        class="px-2 py-0.5 bg-white/10 text-white/70 rounded text-[10px] uppercase tracking-wider hover:bg-white/20 cursor-pointer"
+                      >
+                        +{img().tags.length - 3}
+                      </button>
+                    </Show>
                   </div>
 
                   {/* Actions Section */}
