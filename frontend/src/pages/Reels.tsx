@@ -6,6 +6,7 @@ import {
   Index,
   For,
   Show,
+  type Accessor,
 } from "solid-js";
 import * as api from "../api";
 import type { ImageEntry } from "../api";
@@ -29,45 +30,48 @@ type ModalType = "tag" | "info" | null;
 
 /**
  * A single "slide" in the vertical feed.
- * For linked sets it shows a horizontally-swipeable sub-carousel.
+ * Features a windowed horizontal carousel for linked sets.
  */
 function ReelSlide(props: {
   entry: ImageEntry;
-  active: boolean;
+  index: number;
+  currentIndex: Accessor<number>;
   onTag: () => void;
   onInfo: () => void;
 }) {
   const [subIndex, setSubIndex] = createSignal(0);
 
-  // Build the list of image URLs for this entry (cover + linked)
+  // Vertical Distance logic: Should we render this slide's contents at all?
+  const isVerticalActive = () => props.currentIndex() === props.index;
+  const verticalDistance = () => Math.abs(props.currentIndex() - props.index);
+  
+  // Render window: Render the current slide + 2 neighbors in each direction
+  const shouldRenderVertical = () => verticalDistance() <= 2;
+
+  // Flatten the cover image and linked images into one array
   const slides = () => {
-    const list: { src: string; thumb: string }[] = [
-      {
-        src: api.highResUrl(props.entry.id),
-        thumb: api.thumbnailUrl(props.entry.id),
-      },
+    const list = [
+      { id: "cover", src: api.highResUrl(props.entry.id) },
+      ...(props.entry.linked_images ?? []).map((img) => ({
+        id: img.id,
+        src: api.linkedHighResUrl(props.entry.id, img.id),
+      })),
     ];
-    for (const linked of props.entry.linked_images ?? []) {
-      list.push({
-        src: api.linkedHighResUrl(props.entry.id, linked.id),
-        thumb: api.linkedThumbnailUrl(props.entry.id, linked.id),
-      });
-    }
     return list;
   };
 
   const isSet = () => slides().length > 1;
-  const goNext = () =>
-    setSubIndex((i) => Math.min(slides().length - 1, i + 1));
+  const goNext = () => setSubIndex((i) => Math.min(slides().length - 1, i + 1));
   const goPrev = () => setSubIndex((i) => Math.max(0, i - 1));
 
-  // Reset sub-index when the entry changes
+  // Memory Safety: Reset sub-index if the user scrolls far away vertically
   createEffect(() => {
-    props.entry.id;
-    setSubIndex(0);
+    if (verticalDistance() > 3) {
+      setSubIndex(0);
+    }
   });
 
-  // Touch handling for horizontal swipe within linked set
+  // Touch handling for horizontal swipe
   let touchStartX = 0;
   const onTouchStart = (e: TouchEvent) => {
     touchStartX = e.touches[0].clientX;
@@ -82,30 +86,66 @@ function ReelSlide(props: {
 
   return (
     <div class="relative w-full h-full flex items-center justify-center bg-black select-none snap-start snap-always">
-      {/* Image */}
+      {/* Horizontal Carousel Area */}
       <div
-        class="absolute inset-0 flex items-center justify-center"
+        class="absolute inset-0 flex items-center justify-center overflow-hidden"
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
-        <img
-          src={slides()[subIndex()]?.src ?? ""}
-          alt=""
-          class="w-full h-full object-contain"
-          draggable={false}
-        />
+        <Show when={shouldRenderVertical()}>
+          <For each={slides()}>
+            {(slide, i) => {
+              // Horizontal Windowing Logic:
+              // Only render the CURRENT sub-image and its immediate PREV/NEXT neighbors.
+              const subDistance = () => Math.abs(subIndex() - i());
+              const shouldRenderHorizontal = () => subDistance() <= 1;
+
+              return (
+                <Show when={shouldRenderHorizontal()}>
+                  <div
+                    class="absolute inset-0 flex items-center justify-center transition-opacity duration-300"
+                    style={{
+                      opacity: i() === subIndex() ? "1" : "0",
+                      "pointer-events": i() === subIndex() ? "auto" : "none",
+                      "z-index": i() === subIndex() ? "1" : "0",
+                    }}
+                  >
+                    <img
+                      src={slide.src}
+                      alt=""
+                      class="w-full h-full object-contain"
+                      draggable={false}
+                      // Eager load only if this is the active slide AND the active sub-image
+                      loading={
+                        i() === subIndex() && isVerticalActive()
+                          ? "eager"
+                          : "lazy"
+                      }
+                      // Prioritize decoding for the visible sub-image
+                      decoding={i() === subIndex() ? "sync" : "async"}
+                    />
+                  </div>
+                </Show>
+              );
+            }}
+          </For>
+        </Show>
       </div>
 
       {/* Linked-set arrows (desktop) */}
-      <Show when={isSet()}>
+      <Show when={isSet() && shouldRenderVertical()}>
         <button
-          class={`absolute left-3 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-white/20 transition-all cursor-pointer ${subIndex() === 0 ? "opacity-0 pointer-events-none" : ""}`}
+          class={`absolute left-3 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-white/20 transition-all cursor-pointer ${
+            subIndex() === 0 ? "opacity-0 pointer-events-none" : ""
+          }`}
           onClick={goPrev}
         >
           <ChevronLeft size={22} />
         </button>
         <button
-          class={`absolute right-3 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-white/20 transition-all cursor-pointer ${subIndex() >= slides().length - 1 ? "opacity-0 pointer-events-none" : ""}`}
+          class={`absolute right-3 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-white/20 transition-all cursor-pointer ${
+            subIndex() >= slides().length - 1 ? "opacity-0 pointer-events-none" : ""
+          }`}
           onClick={goNext}
         >
           <ChevronRight size={22} />
@@ -113,7 +153,7 @@ function ReelSlide(props: {
       </Show>
 
       {/* Linked-set dots */}
-      <Show when={isSet()}>
+      <Show when={isSet() && shouldRenderVertical()}>
         <div class="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex gap-1.5">
           <For each={slides()}>
             {(_, i) => (
@@ -155,21 +195,18 @@ function ReelSlide(props: {
             </Show>
           </div>
 
-          {/* Actions row */}
           <div class="flex gap-2">
             <button
               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/15 backdrop-blur-sm text-white rounded-lg text-xs hover:bg-white/25 transition-colors cursor-pointer"
               onClick={props.onTag}
             >
-              <Tag size={14} />
-              Tags
+              <Tag size={14} /> Tags
             </button>
             <button
               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/15 backdrop-blur-sm text-white rounded-lg text-xs hover:bg-white/25 transition-colors cursor-pointer"
               onClick={props.onInfo}
             >
-              <Info size={14} />
-              Info
+              <Info size={14} /> Info
             </button>
           </div>
         </div>
@@ -190,20 +227,21 @@ export default function Reels(props: {
   const [activeIndex, setActiveIndex] = createSignal(0);
   const [modal, setModal] = createSignal<ModalType>(null);
   const [loaded, setLoaded] = createSignal(false);
-
-  // Shuffled feed (separate from store.images so tags still update in-place)
   const [feed, setFeed] = createSignal<ImageEntry[]>([]);
 
   let feedRef: HTMLDivElement | undefined;
 
-  // Init
   onMount(() => {
     store.loadTags();
+    document.body.style.overflow = "hidden";
+  });
+  onCleanup(() => {
+    document.body.style.overflow = "";
+    observer?.disconnect();
   });
 
   const activeImage = () => feed()[activeIndex()] ?? null;
 
-  // Fisher-Yates shuffle
   function shuffle<T>(arr: T[]): T[] {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -213,18 +251,16 @@ export default function Reels(props: {
     return a;
   }
 
-  // When store.images() gets updated (e.g. tag change), mirror into feed keeping same order
+  // Handle store updates
   createEffect(() => {
     const imgs = store.images();
     setFeed((prev) => {
-      if (prev.length === 0) return prev; // initial load handled by doSearch/startBrowsing
-      // Update entries in-place by id map
+      if (prev.length === 0) return prev;
       const byId = new Map(imgs.map((e) => [e.id, e]));
       return prev.map((old) => byId.get(old.id) ?? old);
     });
   });
 
-  // Load feed
   const doSearch = () => {
     const q = searchInput().trim() || undefined;
     store.loadImages(q).then(() => {
@@ -236,7 +272,6 @@ export default function Reels(props: {
     });
   };
 
-  // Browse all
   const startBrowsing = () => {
     store.loadImages().then(() => {
       setFeed(shuffle(store.images()));
@@ -246,62 +281,41 @@ export default function Reels(props: {
     });
   };
 
-  // ── Scroll tracking via IntersectionObserver ──
+  // ── Scroll Tracking ──
   let observer: IntersectionObserver | undefined;
-
   const setupObserver = () => {
     if (observer) observer.disconnect();
     if (!feedRef) return;
-
     observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
-            const idx = Number(
-              (entry.target as HTMLElement).dataset.index ?? 0
-            );
+            const idx = Number((entry.target as HTMLElement).dataset.index ?? 0);
             setActiveIndex(idx);
           }
         }
       },
-      {
-        root: feedRef,
-        threshold: 0.5,
-      }
+      { root: feedRef, threshold: 0.5 }
     );
-
-    for (const child of feedRef.children) {
-      observer.observe(child);
-    }
+    for (const child of feedRef.children) observer.observe(child);
   };
 
-  // Re-attach observer when feed or loaded changes
   createEffect(() => {
-    feed(); // track
-    loaded(); // track
-    // Wait for DOM to be in sync
+    feed();
+    loaded();
     requestAnimationFrame(setupObserver);
   });
 
-  onCleanup(() => observer?.disconnect());
-
-  // ── Desktop mouse drag to scroll vertically ──
+  // ── Mouse Drag Scrolling ──
   const [isDragging, setIsDragging] = createSignal(false);
   const [disableSnap, setDisableSnap] = createSignal(false);
-  
   let dragStartY = 0;
   let dragStartScroll = 0;
   let snapTimeout: number | undefined;
 
   const onMouseDown = (e: MouseEvent) => {
-    // Only left-click
-    if (e.button !== 0) return;
-    // Don't drag if clicking interactive elements
-    if ((e.target as HTMLElement).closest("button, a, input")) return;
-    
-    // Clear any pending snap-reenable timer so we don't snap mid-drag
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button, a, input")) return;
     clearTimeout(snapTimeout);
-    
     setDisableSnap(true);
     setIsDragging(true);
     dragStartY = e.clientY;
@@ -311,78 +325,40 @@ export default function Reels(props: {
 
   const onMouseMove = (e: MouseEvent) => {
     if (!isDragging() || !feedRef) return;
-    const dy = e.clientY - dragStartY;
-    feedRef.scrollTop = dragStartScroll - dy;
+    feedRef.scrollTop = dragStartScroll - (e.clientY - dragStartY);
   };
 
-  const onMouseUp = (e: MouseEvent) => {
+  const onMouseUp = () => {
     if (!isDragging() || !feedRef) return;
-    
     setIsDragging(false);
-    
-    // Snap to nearest slide manually with smooth scroll
     const slideH = feedRef.clientHeight;
     const nearest = Math.round(feedRef.scrollTop / slideH) * slideH;
     feedRef.scrollTo({ top: nearest, behavior: "smooth" });
-
-    // Re-enable CSS snap AFTER the animation finishes (approx 500ms)
-    // This prevents the browser's native snap from overriding our smooth scroll
-    snapTimeout = window.setTimeout(() => {
-      setDisableSnap(false);
-    }, 500);
+    snapTimeout = window.setTimeout(() => setDisableSnap(false), 500);
   };
-
-  // Keyboard: Escape closes modals, then opens search
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      if (modal()) {
-        setModal(null);
-      } else if (!searchOpen()) {
-        setSearchOpen(true);
-      } else {
-        props.onBack();
-      }
-    }
-  };
-  onMount(() => document.addEventListener("keydown", onKeyDown));
-  onCleanup(() => document.removeEventListener("keydown", onKeyDown));
-
-  // Lock body scroll
-  onMount(() => {
-    document.body.style.overflow = "hidden";
-  });
-  onCleanup(() => {
-    document.body.style.overflow = "";
-  });
 
   return (
     <div class="fixed inset-0 z-30 bg-black flex flex-col">
-      {/* ── Top bar ── */}
+      {/* Search Overlay */}
       <div
         class={`absolute top-0 left-0 right-0 z-20 transition-all duration-300 ${
-          searchOpen()
-            ? "bg-black/80 backdrop-blur-md"
-            : "bg-transparent pointer-events-none"
+          searchOpen() ? "bg-black/80 backdrop-blur-md" : "bg-transparent pointer-events-none"
         }`}
       >
         <div class="flex items-center gap-2 p-3 pointer-events-auto">
-          {/* Back button */}
           <button
-            class="p-2 text-white/70 hover:text-white rounded-full hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0"
+            class="p-2 text-white/70 hover:text-white rounded-full hover:bg-white/10 transition-colors cursor-pointer"
             onClick={props.onBack}
-            title="Back to gallery"
           >
             <ArrowLeft size={20} />
           </button>
 
-          {/* Search toggle or search bar */}
           <Show
             when={searchOpen()}
             fallback={
               <button
                 class="p-2 text-white/70 hover:text-white rounded-full hover:bg-white/10 transition-colors cursor-pointer"
                 onClick={() => setSearchOpen(true)}
-                title="Search"
               >
                 <Search size={20} />
               </button>
@@ -391,26 +367,13 @@ export default function Reels(props: {
             <div class="flex-1 flex gap-2 items-center">
               <div class="relative flex-1">
                 <Input
-                  placeholder="Search tags… (leave empty for all)"
+                  placeholder="Search tags…"
                   value={searchInput()}
                   onChange={setSearchInput}
                   onFocus={() => setSearchFocused(true)}
-                  onBlur={() =>
-                    setTimeout(() => setSearchFocused(false), 150)
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      doSearch();
-                      setSearchFocused(false);
-                    }
-                    if (e.key === "Escape") {
-                      if (loaded()) {
-                        setSearchOpen(false);
-                      }
-                    }
-                  }}
-                  class="[&_input]:!bg-white/10 [&_input]:!border-white/10 [&_input]:!text-white [&_input]:!placeholder-white/40"
+                  onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
+                  onKeyDown={(e) => e.key === "Enter" && doSearch()}
+                  class="[&_input]:!bg-white/10 [&_input]:!border-white/10 [&_input]:!text-white"
                 />
                 <Suggestions
                   input={searchInput()}
@@ -421,10 +384,7 @@ export default function Reels(props: {
               </div>
               <Button onClick={doSearch}>Go</Button>
               <Show when={loaded()}>
-                <button
-                  class="p-2 text-white/50 hover:text-white rounded-full hover:bg-white/10 transition-colors cursor-pointer"
-                  onClick={() => setSearchOpen(false)}
-                >
+                <button onClick={() => setSearchOpen(false)} class="p-2 text-white/50 hover:text-white">
                   <X size={18} />
                 </button>
               </Show>
@@ -433,49 +393,24 @@ export default function Reels(props: {
         </div>
       </div>
 
-      {/* ── Welcome / empty states ── */}
+      {/* Main Feed */}
       <Show when={!loaded()}>
-        <div class="flex-1 flex flex-col items-center justify-center text-white/60 gap-4 px-6">
-          <h2 class="text-2xl font-bold text-white/80 tracking-tight">
-            Reels
-          </h2>
-          <p class="text-sm text-center max-w-xs">
-            Search by tags or browse all images in an immersive feed.
-          </p>
-          <div class="flex gap-3 mt-2">
+        <div class="flex-1 flex flex-col items-center justify-center text-white/60 gap-4">
+          <h2 class="text-2xl font-bold text-white">Reels</h2>
+          <div class="flex gap-3">
             <Button onClick={startBrowsing}>Browse All</Button>
-            <Button
-              variant="secondary"
-              onClick={() => setSearchOpen(true)}
-              class="!text-white/70"
-            >
-              Search
-            </Button>
+            <Button variant="secondary" onClick={() => setSearchOpen(true)}>Search</Button>
           </div>
         </div>
       </Show>
 
-      <Show when={loaded() && feed().length === 0}>
-        <div class="flex-1 flex flex-col items-center justify-center text-white/60 gap-4 px-6">
-          <p class="text-sm">No images match your search.</p>
-          <Button
-            variant="secondary"
-            onClick={() => setSearchOpen(true)}
-            class="!text-white/70"
-          >
-            Try Again
-          </Button>
-        </div>
-      </Show>
-
-      {/* ── Feed ── */}
       <Show when={loaded() && feed().length > 0}>
         <div
           ref={feedRef}
-          class="flex-1 overflow-y-scroll snap-y snap-mandatory"
+          class="flex-1 overflow-y-scroll snap-y snap-mandatory scrollbar-hide"
           style={{
             "scroll-snap-type": disableSnap() ? "none" : "y mandatory",
-            "cursor": isDragging() ? "grabbing" : "grab",
+            cursor: isDragging() ? "grabbing" : "grab",
           }}
           onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
@@ -484,14 +419,11 @@ export default function Reels(props: {
         >
           <Index each={feed()}>
             {(entry, i) => (
-              <div
-                class="w-full h-[100dvh] flex-shrink-0"
-                data-index={i}
-                style={{ "scroll-snap-align": "start" }}
-              >
+              <div class="w-full h-[100dvh] flex-shrink-0" data-index={i} style={{ "scroll-snap-align": "start" }}>
                 <ReelSlide
                   entry={entry()}
-                  active={activeIndex() === i}
+                  index={i}
+                  currentIndex={activeIndex}
                   onTag={() => setModal("tag")}
                   onInfo={() => setModal("info")}
                 />
@@ -501,18 +433,8 @@ export default function Reels(props: {
         </div>
       </Show>
 
-      {/* ── Modals ── */}
-      <TagModal
-        open={modal() === "tag"}
-        onClose={() => setModal(null)}
-        image={activeImage()}
-        store={store}
-      />
-      <InfoModal
-        open={modal() === "info"}
-        onClose={() => setModal(null)}
-        image={activeImage()}
-      />
+      <TagModal open={modal() === "tag"} onClose={() => setModal(null)} image={activeImage()} store={store} />
+      <InfoModal open={modal() === "info"} onClose={() => setModal(null)} image={activeImage()} />
     </div>
   );
 }
