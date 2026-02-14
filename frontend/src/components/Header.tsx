@@ -1,12 +1,15 @@
 import { Button } from "./ui/Button";
 import { Dropdown, type MenuItem } from "./ui/Dropdown";
+import { Clapperboard } from "lucide-solid";
 import * as api from "../api";
+import type { Page } from "../App";
 
 export function Header(props: {
   onUpload: () => void;
   onBulkTag: () => void;
   onRenameTag: () => void;
   onStatusChange: () => void;
+  onNavigate: (page: Page) => void;
 }) {
   const handleLogout = async () => {
     await api.logout();
@@ -25,6 +28,7 @@ export function Header(props: {
 
   const mobileItems: MenuItem[] = [
     { label: "Upload", onClick: props.onUpload },
+    { label: "Reels", onClick: () => props.onNavigate("reels") },
     { label: "Bulk Tag", onClick: props.onBulkTag },
     { label: "Rename Tag", onClick: props.onRenameTag },
     { label: "Logout", onClick: handleLogout },
@@ -40,6 +44,10 @@ export function Header(props: {
         <nav class="hidden md:flex items-center gap-2">
           <Button variant="ghost" onClick={props.onUpload}>
             +
+          </Button>
+          <Button variant="ghost" onClick={() => props.onNavigate("reels")}>
+            <Clapperboard size={16} />
+            <span class="ml-1">Reels</span>
           </Button>
           <Dropdown trigger={<>Tools ▾</>} items={toolItems} />
           <Button variant="ghost" onClick={handleLogout}>Logout</Button>

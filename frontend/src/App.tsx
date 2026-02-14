@@ -3,10 +3,14 @@ import { fetchStatus, type Status } from "./api";
 import Setup from "./pages/Setup";
 import Unlock from "./pages/Unlock";
 import Vault from "./pages/Vault";
+import Reels from "./pages/Reels";
+
+export type Page = "vault" | "reels";
 
 export default function App() {
   const [status, setStatus] = createSignal<Status | null>(null);
   const [loading, setLoading] = createSignal(true);
+  const [page, setPage] = createSignal<Page>("vault");
 
   const checkStatus = async () => {
     setLoading(true);
@@ -44,7 +48,12 @@ export default function App() {
                 <Unlock unlocked={s().unlocked} onComplete={checkStatus} />
               </Show>
               <Show when={s().initialized && s().unlocked && s().authenticated}>
-                <Vault onStatusChange={checkStatus} />
+                <Show when={page() === "vault"}>
+                  <Vault onStatusChange={checkStatus} onNavigate={setPage} />
+                </Show>
+                <Show when={page() === "reels"}>
+                  <Reels onBack={() => setPage("vault")} onStatusChange={checkStatus} />
+                </Show>
               </Show>
             </>
           )}

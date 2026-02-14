@@ -18,10 +18,11 @@ import {
   isImageBulkSelected,
   applyBulkTags,
 } from "../components/BulkTag";
+import type { Page } from "../App";
 
 type ModalType = "upload" | "tag" | "info" | "bulkSetup" | "rename" | null;
 
-export default function Vault(props: { onStatusChange: () => void }) {
+export default function Vault(props: { onStatusChange: () => void; onNavigate: (page: Page) => void }) {
   const store = createVaultStore(props.onStatusChange);
 
   // ── UI state ──
@@ -115,6 +116,7 @@ export default function Vault(props: { onStatusChange: () => void }) {
         onBulkTag={() => setModal("bulkSetup")}
         onRenameTag={() => setModal("rename")}
         onStatusChange={props.onStatusChange}
+        onNavigate={props.onNavigate}
       />
 
       <main class="max-w-7xl mx-auto p-4">
