@@ -39,6 +39,14 @@ impl ImageVariant {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LinkedImage {
+    pub id: Uuid,
+    pub original_mime: String,
+    pub original_size: u64,
+    pub variants: Vec<ImageVariant>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ImageEntry {
     pub id: Uuid,
     pub original_mime: String,
@@ -47,6 +55,8 @@ pub struct ImageEntry {
     pub variants: Vec<ImageVariant>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub linked_images: Vec<LinkedImage>,
 }
 
 impl ImageEntry {
@@ -67,6 +77,18 @@ impl ImageEntry {
         }
 
         Ok(normalized)
+    }
+}
+
+pub fn mime_to_ext(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/avif" => "avif",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/jxl" => "jxl",
+        _ => "bin",
     }
 }
 

@@ -39,4 +39,7 @@ pub enum VaultError {
 
     #[error("System time error: {0}")]
     Time(#[from] std::time::SystemTimeError),
+
+    #[error("Zip error: {0}")]
+    Zip(String),
 }

@@ -1,15 +1,28 @@
 use crate::vault::{
     crypto,
     error::VaultError,
-    types::{ImageEntry, VaultMetadata},
+    types::{ImageEntry, ImageVariant, VaultMetadata},
 };
 use sled::{Config, Db, Tree};
 use std::str::from_utf8;
 use std::time::{SystemTime, UNIX_EPOCH};
 use rayon::prelude::*;
+use serde::Deserialize;
 use uuid::Uuid;
 
-const CURRENT_VAULT_VERSION: u32 = 1;
+const CURRENT_VAULT_VERSION: u32 = 2;
+
+/// V1 format used only for migration deserialization.
+#[derive(Deserialize)]
+struct ImageEntryV1 {
+    id: Uuid,
+    original_mime: String,
+    original_size: u64,
+    created_at: u64,
+    variants: Vec<ImageVariant>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
 
 #[derive(Clone)]
 pub struct Database {
@@ -39,7 +52,7 @@ impl Database {
         match self.db.get("vault_version")? {
             Some(v) => {
                 let ver = from_utf8(&v)?.parse::<u32>()?;
-                if ver != CURRENT_VAULT_VERSION {
+                if ver > CURRENT_VAULT_VERSION {
                     return Err(VaultError::InvalidVersion {
                         expected: CURRENT_VAULT_VERSION,
                         found: ver,
@@ -144,5 +157,55 @@ impl Database {
         list.par_sort_unstable_by(|a, b| b.created_at.cmp(&a.created_at));
 
         Ok(list)
+    }
+
+    // --- Migration ---
+
+    /// Returns the current vault version stored in the DB.
+    pub fn get_version(&self) -> Result<u32, VaultError> {
+        match self.db.get("vault_version")? {
+            Some(v) => Ok(from_utf8(&v)?.parse::<u32>()?),
+            None => Ok(CURRENT_VAULT_VERSION),
+        }
+    }
+
+    /// Migrates all entries from v1 format (no linked_images) to v2 format.
+    /// Safe to call multiple times (handles partially-migrated DBs).
+    pub fn migrate_v1_to_v2(&self, key: &[u8]) -> Result<(), VaultError> {
+        for res in self.entries_tree.iter() {
+            let (k, v) = res?;
+            let id = Uuid::from_slice(&k)
+                .map_err(|_| VaultError::Corruption("Bad UUID in DB".into()))?;
+            let decrypted = crypto::decrypt(key, &v, id.as_bytes())?;
+
+            // Try v2 format first (handles interrupted migration)
+            let entry = match postcard::from_bytes::<ImageEntry>(&decrypted) {
+                Ok(e) => e,
+                Err(_) => {
+                    // Must be v1 format — convert
+                    let v1: ImageEntryV1 = postcard::from_bytes(&decrypted)?;
+                    ImageEntry {
+                        id: v1.id,
+                        original_mime: v1.original_mime,
+                        original_size: v1.original_size,
+                        created_at: v1.created_at,
+                        variants: v1.variants,
+                        tags: v1.tags,
+                        linked_images: Vec::new(),
+                    }
+                }
+            };
+
+            // Re-serialize and re-encrypt as v2
+            let bytes = postcard::to_stdvec(&entry)?;
+            let encrypted = crypto::encrypt(key, &bytes, id.as_bytes())?;
+            self.entries_tree.insert(id.as_bytes(), encrypted)?;
+        }
+
+        // Update version
+        self.db
+            .insert("vault_version", CURRENT_VAULT_VERSION.to_string().as_bytes())?;
+        self.flush()?;
+        Ok(())
     }
 }

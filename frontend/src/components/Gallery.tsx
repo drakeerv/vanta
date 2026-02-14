@@ -1,6 +1,7 @@
 import { For, Show, createSignal, onMount, onCleanup } from "solid-js";
 import type { ImageEntry } from "../api";
 import * as api from "../api";
+import { Layers } from "lucide-solid";
 
 function GalleryItem(props: {
   img: ImageEntry;
@@ -37,7 +38,7 @@ function GalleryItem(props: {
   return (
     <div
       ref={ref}
-      class={containerClass()}
+      class={containerClass() + " relative"}
       onClick={props.onClick}
     >
       <Show 
@@ -50,6 +51,12 @@ function GalleryItem(props: {
           alt=""
           class="max-w-full max-h-full object-contain rounded"
         />
+      </Show>
+      <Show when={(props.img.linked_images?.length ?? 0) > 0}>
+        <div class="absolute top-1.5 right-1.5 bg-black/60 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 pointer-events-none">
+          <Layers size={10} />
+          {(props.img.linked_images?.length ?? 0) + 1}
+        </div>
       </Show>
     </div>
   );

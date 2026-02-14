@@ -19,6 +19,9 @@ export function InfoModal(props: {
           <Row label="Created" value={new Date(img()!.created_at * 1000).toLocaleString()} />
           <Row label="Variants" value={(img()!.variants || []).join(", ") || "None"} />
           <Row label="Tags" value={(img()!.tags || []).join(", ") || "None"} />
+          {(img()!.linked_images?.length ?? 0) > 0 && (
+            <Row label="Set Size" value={`${(img()!.linked_images?.length ?? 0) + 1} images`} />
+          )}
         </div>
       )}
     </Modal>

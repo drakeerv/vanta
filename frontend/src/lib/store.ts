@@ -30,7 +30,7 @@ export function createVaultStore(onUnauthorized: () => void) {
   };
 
   const updateImage = (id: string, entry: ImageEntry) => {
-    setImages((prev) => prev.map((img) => (img.id === id ? { ...img, tags: entry.tags } : img)));
+    setImages((prev) => prev.map((img) => (img.id === id ? entry : img)));
   };
 
   return { images, setImages, tags, loadImages, loadTags, refresh, updateImage };

@@ -3,7 +3,7 @@ use axum::{
     extract::{Multipart, Query, Request, State},
     http::StatusCode,
     middleware,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use tower_sessions::Session;
@@ -11,7 +11,7 @@ use tower_sessions::Session;
 use crate::{
     app_state::AppState,
     image_processor,
-    vault::{ImageVariant, VaultError},
+    vault::{ImageVariant, VaultError, mime_to_ext},
 };
 
 const ALLOWED_IMAGE_TYPES: &[&str] = &[
@@ -61,6 +61,16 @@ pub fn get_api_router(state: AppState) -> Router {
         .route("/images/{id}", delete(delete_image))
         .route("/images/{id}/tags", post(add_tag))
         .route("/images/{id}/tags", delete(remove_tag))
+        .route("/images/{id}/download", get(download_image))
+        .route("/images/{id}/linked", post(upload_to_linked_set))
+        .route(
+            "/images/{id}/linked/{sub_id}",
+            delete(remove_from_linked_set),
+        )
+        .route(
+            "/images/{id}/linked/{sub_id}/{variant}",
+            get(get_linked_image),
+        )
         .route("/tags", get(list_tags))
         .route("/tags/rename", post(rename_tag))
         .route_layer(middleware::from_fn_with_state(
@@ -368,4 +378,158 @@ async fn rename_tag(
         })?;
 
     Ok(Json(serde_json::json!({ "renamed": count })))
+}
+
+// --- Linked Image Endpoints ---
+
+async fn upload_to_linked_set(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    mut multipart: Multipart,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let vault = state.vault.read().await;
+
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap_or_default().to_string();
+        let mime = field.content_type().unwrap_or("image/jpeg").to_string();
+
+        if !ALLOWED_IMAGE_TYPES.contains(&mime.as_str()) {
+            return Err((StatusCode::BAD_REQUEST, "Unsupported file type".to_string()));
+        }
+
+        if name == "file" {
+            let raw_data = field
+                .bytes()
+                .await
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+            let processed = image_processor::process_upload(&raw_data, &mime)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+            let entry = vault
+                .store_linked_image(
+                    id,
+                    processed.original_mime,
+                    processed.original_size,
+                    processed.variants,
+                )
+                .await
+                .map_err(|e| match e {
+                    VaultError::NotFound(_) => {
+                        (StatusCode::NOT_FOUND, "Image not found".to_string())
+                    }
+                    _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+                })?;
+
+            return Ok((StatusCode::CREATED, Json(entry)));
+        }
+    }
+
+    Err((StatusCode::BAD_REQUEST, "No file provided".to_string()))
+}
+
+async fn remove_from_linked_set(
+    State(state): State<AppState>,
+    axum::extract::Path((id, sub_id)): axum::extract::Path<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let vault = state.vault.read().await;
+
+    let entry = vault
+        .remove_linked_image(id, sub_id)
+        .await
+        .map_err(|e| match e {
+            VaultError::NotFound(_) => (StatusCode::NOT_FOUND, "Not found".to_string()),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        })?;
+
+    Ok(Json(entry))
+}
+
+async fn get_linked_image(
+    State(state): State<AppState>,
+    axum::extract::Path((id, sub_id, variant_name)): axum::extract::Path<(
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+    )>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let variant = ImageVariant::from_name(&variant_name).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!("Invalid variant: {variant_name}"),
+    ))?;
+
+    let vault = state.vault.read().await;
+
+    let (data, mime) = vault
+        .retrieve_linked_image(id, sub_id, variant)
+        .await
+        .map_err(|e| match e {
+            VaultError::NotFound(_) => (StatusCode::NOT_FOUND, "Not found".to_string()),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        })?;
+
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (
+                axum::http::header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable".to_string(),
+            ),
+        ],
+        data,
+    ))
+}
+
+async fn download_image(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Result<Response, (StatusCode, String)> {
+    let vault = state.vault.read().await;
+
+    let entry = vault.get_entry(id).map_err(|e| match e {
+        VaultError::NotFound(_) => (StatusCode::NOT_FOUND, "Not found".to_string()),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    })?;
+
+    if entry.linked_images.is_empty() {
+        // Single image — serve original directly
+        let (data, mime) = vault
+            .retrieve_image(id, ImageVariant::Original)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let ext = mime_to_ext(&entry.original_mime);
+        Ok((
+            [
+                (axum::http::header::CONTENT_TYPE, mime),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{id}.{ext}\""),
+                ),
+            ],
+            data,
+        )
+            .into_response())
+    } else {
+        // Linked set — serve zip
+        let zip_data = vault
+            .download_linked_set(id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        Ok((
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "application/zip".to_string(),
+                ),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{id}.zip\""),
+                ),
+            ],
+            zip_data,
+        )
+            .into_response())
+    }
 }

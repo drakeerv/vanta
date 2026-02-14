@@ -6,6 +6,13 @@ export interface Status {
   authenticated: boolean;
 }
 
+export interface LinkedImage {
+  id: string;
+  original_mime: string;
+  original_size: number;
+  variants: string[];
+}
+
 export interface ImageEntry {
   id: string;
   original_mime: string;
@@ -13,6 +20,7 @@ export interface ImageEntry {
   created_at: number;
   variants: string[];
   tags: string[];
+  linked_images: LinkedImage[];
 }
 
 export async function fetchStatus(): Promise<Status> {
@@ -115,4 +123,36 @@ export function highResUrl(id: string): string {
 
 export function originalUrl(id: string): string {
   return `/api/images/${id}/original`;
+}
+
+// --- Linked Image helpers ---
+
+export function linkedThumbnailUrl(entryId: string, subId: string): string {
+  return `/api/images/${entryId}/linked/${subId}/thumbnail`;
+}
+
+export function linkedHighResUrl(entryId: string, subId: string): string {
+  return `/api/images/${entryId}/linked/${subId}/high`;
+}
+
+export function linkedOriginalUrl(entryId: string, subId: string): string {
+  return `/api/images/${entryId}/linked/${subId}/original`;
+}
+
+export function downloadUrl(id: string): string {
+  return `/api/images/${id}/download`;
+}
+
+export async function uploadToLinkedSet(entryId: string, file: File): Promise<ImageEntry> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`/api/images/${entryId}/linked`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function removeFromLinkedSet(entryId: string, subId: string): Promise<ImageEntry> {
+  const res = await fetch(`/api/images/${entryId}/linked/${subId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }

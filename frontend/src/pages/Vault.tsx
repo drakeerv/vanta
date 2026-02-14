@@ -162,6 +162,7 @@ export default function Vault(props: { onStatusChange: () => void }) {
         onTag={() => setModal("tag")}
         onInfo={() => setModal("info")}
         onDelete={deleteCurrentImage}
+        onImageUpdate={(id, entry) => store.updateImage(id, entry)}
       />
 
       {/* ── Modals ── */}

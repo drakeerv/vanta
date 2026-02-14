@@ -4,7 +4,7 @@ mod error;
 mod types;
 
 pub use error::VaultError;
-pub use types::{ImageEntry, ImageVariant};
+pub use types::{ImageEntry, ImageVariant, LinkedImage, mime_to_ext};
 
 use crate::vault::db::Database;
 use crate::vault::types::VaultMetadata;
@@ -12,11 +12,13 @@ use rayon::prelude::*;
 use secrecy::{ExposeSecret, SecretBox};
 use std::{
     collections::{HashMap, HashSet},
+    io::{Cursor, Write},
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::fs;
 use uuid::Uuid;
+use zip::write::{SimpleFileOptions, ZipWriter};
 
 const DATABASE_DIR: &str = "vault/db";
 const DATA_DIR: &str = "vault/storage";
@@ -73,6 +75,12 @@ impl Vault {
             return Err(VaultError::EncryptionError);
         }
         let master_key = SecretBox::from(master_key_bytes);
+
+        // Run DB migration if needed (v1 → v2)
+        let db_version = self.db.get_version()?;
+        if db_version < 2 {
+            self.db.migrate_v1_to_v2(master_key.expose_secret())?;
+        }
 
         // Load all entries to build the tag index
         let all_entries = self.db.get_all_entries(master_key.expose_secret())?;
@@ -177,6 +185,7 @@ impl Vault {
                 created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
                 variants: variants.iter().map(|(v, _)| *v).collect(),
                 tags: Vec::new(),
+                linked_images: Vec::new(),
             };
             Ok((id, key, entry))
         })?;
@@ -226,10 +235,11 @@ impl Vault {
     }
 
     pub async fn delete_image(&self, id: Uuid) -> Result<(), VaultError> {
-        // 1. Update Index and DB
-        self.with_data_mut(|data| {
-            // We need to read the entry first to know which tags to clean up
+        // 1. Update Index and DB, collect linked image IDs
+        let linked_ids = self.with_data_mut(|data| {
+            let mut sub_ids = Vec::new();
             if let Ok(entry) = self.db.get_entry(data.encryption_key.expose_secret(), id) {
+                sub_ids = entry.linked_images.iter().map(|l| l.id).collect();
                 for tag in entry.tags {
                     if let Some(set) = data.tag_index.get_mut(&tag) {
                         set.remove(&id);
@@ -240,16 +250,27 @@ impl Vault {
                 }
             }
             self.db.remove_entry(id)?;
-            Ok(())
+            Ok(sub_ids)
         })?;
 
-        // 2. Delete Files
+        // 2. Delete cover files
         let dir = format!("{}/{}", DATA_DIR, id);
-        if let Err(e) = fs::remove_dir_all(dir).await {
+        if let Err(e) = fs::remove_dir_all(&dir).await {
             if e.kind() != std::io::ErrorKind::NotFound {
                 return Err(e.into());
             }
         }
+
+        // 3. Delete linked image files
+        for sub_id in linked_ids {
+            let sub_dir = format!("{}/{}", DATA_DIR, sub_id);
+            if let Err(e) = fs::remove_dir_all(&sub_dir).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e.into());
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -341,6 +362,10 @@ impl Vault {
 
     // --- Search/List ---
 
+    pub fn get_entry(&self, id: Uuid) -> Result<ImageEntry, VaultError> {
+        self.with_data(|data| self.db.get_entry(data.encryption_key.expose_secret(), id))
+    }
+
     pub fn list_images(&self) -> Result<Vec<ImageEntry>, VaultError> {
         self.with_data(|data| self.db.get_all_entries(data.encryption_key.expose_secret()))
     }
@@ -416,6 +441,159 @@ impl Vault {
     }
 
     // --- Helpers ---
+
+    // --- Linked Image Operations ---
+
+    /// Adds a new image to an existing entry's linked set.
+    pub async fn store_linked_image(
+        &self,
+        entry_id: Uuid,
+        original_mime: String,
+        size: u64,
+        variants: Vec<(ImageVariant, Vec<u8>)>,
+    ) -> Result<ImageEntry, VaultError> {
+        let (key, mut entry) = self.with_data(|data| {
+            let key = data.encryption_key.expose_secret().to_vec();
+            let entry = self.db.get_entry(data.encryption_key.expose_secret(), entry_id)?;
+            Ok((key, entry))
+        })?;
+
+        let sub_id = Uuid::new_v4();
+        let dir_path = format!("{}/{}", DATA_DIR, sub_id);
+        fs::create_dir_all(&dir_path).await?;
+
+        for (variant, bytes) in &variants {
+            let aad = Self::make_aad(sub_id, variant.filename());
+            let encrypted = crypto::encrypt(&key, bytes, &aad)?;
+            let path = format!("{}/{}.enc", dir_path, variant.filename());
+            fs::write(&path, encrypted).await?;
+        }
+
+        let linked = LinkedImage {
+            id: sub_id,
+            original_mime,
+            original_size: size,
+            variants: variants.iter().map(|(v, _)| *v).collect(),
+        };
+        entry.linked_images.push(linked);
+        self.db.insert_entry(&key, &entry)?;
+
+        Ok(entry)
+    }
+
+    /// Removes a sub-image from a linked set.
+    pub async fn remove_linked_image(
+        &self,
+        entry_id: Uuid,
+        sub_id: Uuid,
+    ) -> Result<ImageEntry, VaultError> {
+        let (key, mut entry) = self.with_data(|data| {
+            let key = data.encryption_key.expose_secret().to_vec();
+            let entry = self.db.get_entry(data.encryption_key.expose_secret(), entry_id)?;
+            Ok((key, entry))
+        })?;
+
+        let pos = entry
+            .linked_images
+            .iter()
+            .position(|l| l.id == sub_id)
+            .ok_or(VaultError::NotFound(format!(
+                "Linked image {} not found",
+                sub_id
+            )))?;
+
+        entry.linked_images.remove(pos);
+        self.db.insert_entry(&key, &entry)?;
+
+        // Delete sub-image files
+        let dir = format!("{}/{}", DATA_DIR, sub_id);
+        if let Err(e) = fs::remove_dir_all(&dir).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(e.into());
+            }
+        }
+
+        Ok(entry)
+    }
+
+    /// Retrieves a specific variant of a linked sub-image.
+    pub async fn retrieve_linked_image(
+        &self,
+        entry_id: Uuid,
+        sub_id: Uuid,
+        variant: ImageVariant,
+    ) -> Result<(Vec<u8>, String), VaultError> {
+        let (key_vec, mime) = self.with_data(|data| {
+            let key = data.encryption_key.expose_secret();
+            let entry = self.db.get_entry(key, entry_id)?;
+
+            let linked = entry
+                .linked_images
+                .iter()
+                .find(|l| l.id == sub_id)
+                .ok_or(VaultError::NotFound(format!(
+                    "Linked image {} not found in set {}",
+                    sub_id, entry_id
+                )))?;
+
+            if !linked.variants.contains(&variant) {
+                return Err(VaultError::NotFound(format!(
+                    "Variant missing: {}",
+                    sub_id
+                )));
+            }
+            Ok((key.to_vec(), linked.original_mime.clone()))
+        })?;
+
+        let path = format!("{}/{}/{}.enc", DATA_DIR, sub_id, variant.filename());
+        let encrypted_data = fs::read(&path).await?;
+        let aad = Self::make_aad(sub_id, variant.filename());
+        let decrypted = crypto::decrypt(&key_vec, &encrypted_data, &aad)?;
+
+        Ok((decrypted, variant.mime(&mime)))
+    }
+
+    /// Downloads a linked set as a zip archive containing all original images.
+    pub async fn download_linked_set(&self, id: Uuid) -> Result<Vec<u8>, VaultError> {
+        let entry = self.get_entry(id)?;
+
+        // Collect all original images
+        let mut images: Vec<(String, Vec<u8>)> = Vec::new();
+
+        // Cover image
+        let (cover_data, _) = self.retrieve_image(id, ImageVariant::Original).await?;
+        let ext = mime_to_ext(&entry.original_mime);
+        images.push((format!("1_cover.{ext}"), cover_data));
+
+        // Linked images
+        for (i, linked) in entry.linked_images.iter().enumerate() {
+            let (data, _) = self
+                .retrieve_linked_image(id, linked.id, ImageVariant::Original)
+                .await?;
+            let lext = mime_to_ext(&linked.original_mime);
+            images.push((format!("{}.{lext}", i + 2), data));
+        }
+
+        // Build zip synchronously
+        let buf = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(buf);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+        for (name, data) in &images {
+            zip.start_file(name, options)
+                .map_err(|e| VaultError::Zip(e.to_string()))?;
+            zip.write_all(data)
+                .map_err(|e| VaultError::Zip(e.to_string()))?;
+        }
+
+        let result = zip
+            .finish()
+            .map_err(|e| VaultError::Zip(e.to_string()))?;
+        Ok(result.into_inner())
+    }
+
+    // --- Core Helpers ---
 
     fn with_data<F, R>(&self, f: F) -> Result<R, VaultError>
     where
