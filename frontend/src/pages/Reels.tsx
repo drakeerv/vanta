@@ -71,12 +71,37 @@ function ReelSlide(props: {
     }
   });
 
-  // Touch handling for horizontal swipe
+  // --- Improved Touch Handling ---
   let touchStartX = 0;
+  let touchStartY = 0;
+  let isHorizontalSwipe = false;
+
   const onTouchStart = (e: TouchEvent) => {
     touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+    isHorizontalSwipe = false;
   };
+
+  const onTouchMove = (e: TouchEvent) => {
+    // If we've already determined this is a horizontal swipe, prevent vertical scrolling
+    if (isHorizontalSwipe) {
+      if (e.cancelable) e.preventDefault();
+      return;
+    }
+
+    const dx = Math.abs(e.touches[0].clientX - touchStartX);
+    const dy = Math.abs(e.touches[0].clientY - touchStartY);
+
+    // If movement is primarily horizontal and meets a threshold, lock it
+    if (dx > dy && dx > 10) {
+      isHorizontalSwipe = true;
+      if (e.cancelable) e.preventDefault();
+    }
+  };
+
   const onTouchEnd = (e: TouchEvent) => {
+    if (!isHorizontalSwipe) return;
+    
     const dx = e.changedTouches[0].clientX - touchStartX;
     if (Math.abs(dx) > 50) {
       if (dx < 0) goNext();
@@ -89,23 +114,24 @@ function ReelSlide(props: {
       {/* Horizontal Carousel Area */}
       <div
         class="absolute inset-0 flex items-center justify-center overflow-hidden"
+        style={{ "touch-action": "pan-y" }} // Tell browser we handle horizontal gestures
         onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
         <Show when={shouldRenderVertical()}>
           <For each={slides()}>
             {(slide, i) => {
-              // Horizontal Windowing Logic:
-              // Only render the CURRENT sub-image and its immediate PREV/NEXT neighbors.
               const subDistance = () => Math.abs(subIndex() - i());
               const shouldRenderHorizontal = () => subDistance() <= 1;
 
               return (
                 <Show when={shouldRenderHorizontal()}>
                   <div
-                    class="absolute inset-0 flex items-center justify-center transition-opacity duration-300"
+                    class="absolute inset-0 flex items-center justify-center transition-all duration-300 ease-out"
                     style={{
                       opacity: i() === subIndex() ? "1" : "0",
+                      transform: i() === subIndex() ? "translateX(0)" : `translateX(${(i() - subIndex()) * 20}px)`,
                       "pointer-events": i() === subIndex() ? "auto" : "none",
                       "z-index": i() === subIndex() ? "1" : "0",
                     }}
@@ -115,13 +141,11 @@ function ReelSlide(props: {
                       alt=""
                       class="w-full h-full object-contain"
                       draggable={false}
-                      // Eager load only if this is the active slide AND the active sub-image
                       loading={
                         i() === subIndex() && isVerticalActive()
                           ? "eager"
                           : "lazy"
                       }
-                      // Prioritize decoding for the visible sub-image
                       decoding={i() === subIndex() ? "sync" : "async"}
                     />
                   </div>
@@ -132,41 +156,53 @@ function ReelSlide(props: {
         </Show>
       </div>
 
-      {/* Linked-set arrows (desktop) */}
+      {/* Linked-set arrows (desktop hidden on mobile) */}
       <Show when={isSet() && shouldRenderVertical()}>
-        <button
-          class={`absolute left-3 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-white/20 transition-all cursor-pointer ${
-            subIndex() === 0 ? "opacity-0 pointer-events-none" : ""
-          }`}
-          onClick={goPrev}
-        >
-          <ChevronLeft size={22} />
-        </button>
-        <button
-          class={`absolute right-3 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-white/20 transition-all cursor-pointer ${
-            subIndex() >= slides().length - 1 ? "opacity-0 pointer-events-none" : ""
-          }`}
-          onClick={goNext}
-        >
-          <ChevronRight size={22} />
-        </button>
+        <div class="hidden md:block">
+          <button
+            class={`absolute left-3 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-white/20 transition-all cursor-pointer ${
+              subIndex() === 0 ? "opacity-0 pointer-events-none" : ""
+            }`}
+            onClick={goPrev}
+          >
+            <ChevronLeft size={22} />
+          </button>
+          <button
+            class={`absolute right-3 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-white/20 transition-all cursor-pointer ${
+              subIndex() >= slides().length - 1 ? "opacity-0 pointer-events-none" : ""
+            }`}
+            onClick={goNext}
+          >
+            <ChevronRight size={22} />
+          </button>
+        </div>
       </Show>
 
-      {/* Linked-set dots */}
+      {/* Linked-set indicators (Dots or Counter) */}
       <Show when={isSet() && shouldRenderVertical()}>
-        <div class="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex gap-1.5">
-          <For each={slides()}>
-            {(_, i) => (
-              <button
-                class={`w-2 h-2 rounded-full transition-all cursor-pointer ${
-                  i() === subIndex()
-                    ? "bg-white scale-110"
-                    : "bg-white/40 hover:bg-white/60"
-                }`}
-                onClick={() => setSubIndex(i())}
-              />
-            )}
-          </For>
+        <div 
+          class="absolute top-20 left-1/2 -translate-x-1/2 z-10 flex gap-1.5 items-center justify-center pointer-events-none"
+        >
+          <Show 
+            when={slides().length < 10}
+            fallback={
+              <div class="px-3 py-1 bg-black/40 backdrop-blur-md rounded-full text-[10px] text-white font-bold tracking-widest border border-white/10">
+                {subIndex() + 1} / {slides().length}
+              </div>
+            }
+          >
+            <For each={slides()}>
+              {(_, i) => (
+                <div
+                  class={`h-1.5 rounded-full transition-all duration-300 ${
+                    i() === subIndex()
+                      ? "bg-white w-4"
+                      : "bg-white/30 w-1.5"
+                  }`}
+                />
+              )}
+            </For>
+          </Show>
         </div>
       </Show>
 
