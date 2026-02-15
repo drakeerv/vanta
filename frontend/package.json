@@ -9,15 +9,16 @@
   },
   "dependencies": {
     "@kobalte/core": "^0.13.11",
-    "lucide-solid": "^0.563.0",
-    "panzoom": "^9.4.3",
+    "@types/hammerjs": "^2.0.46",
+    "hammerjs": "^2.0.8",
+    "lucide-solid": "^0.564.0",
     "solid-js": "^1.9.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0",
+    "vite": "^7.3.1",
     "vite-plugin-solid": "^2.11.0"
   }
 }

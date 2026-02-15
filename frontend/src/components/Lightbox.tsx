@@ -1,21 +1,12 @@
-import { Show, For, onMount, onCleanup, createSignal, createEffect } from "solid-js";
+import { Show, For, createSignal, createEffect } from "solid-js";
 import { Dialog } from "@kobalte/core/dialog";
-import panzoom from "panzoom";
 import { 
-  Tag, 
-  Info, 
-  Download, 
-  Trash2, 
-  X,
-  Eye,
-  EyeOff,
-  ChevronLeft,
-  ChevronRight,
-  Plus,
-  Minus,
+  Tag, Info, Download, Trash2, X, Eye, EyeOff, 
+  ChevronLeft, ChevronRight, Plus, Minus, LayoutGrid 
 } from "lucide-solid";
 import type { ImageEntry } from "../api";
 import * as api from "../api";
+import { HammerZoom } from "./HammerZoom";
 
 export function Lightbox(props: {
   image: ImageEntry | null;
@@ -26,23 +17,19 @@ export function Lightbox(props: {
   onImageUpdate: (id: string, entry: ImageEntry) => void;
 }) {
   const [showUI, setShowUI] = createSignal(true);
+  
+  // Default gallery to true on large screens, false on mobile
+  const [showGallery, setShowGallery] = createSignal(window.innerWidth > 1024);
+  
   const [currentIndex, setCurrentIndex] = createSignal(0);
+  const [isZoomed, setIsZoomed] = createSignal(false);
   const [uploading, setUploading] = createSignal(false);
   let addFileRef: HTMLInputElement | undefined;
 
-  // ── Reset Logic ──
-  // We only want to reset the index to 0 if the actual Image ID changes.
-  // This prevents resetting when adding tags or adding images to the set.
-  let lastId: string | null = null;
   createEffect(() => {
-    const currentId = props.image?.id ?? null;
-    if (currentId !== lastId) {
-      setCurrentIndex(0);
-      lastId = currentId;
-    }
+    if (props.image?.id) setCurrentIndex(0);
   });
 
-  // ── Data Helpers ──
   const slides = () => {
     const img = props.image;
     if (!img) return [];
@@ -56,276 +43,197 @@ export function Lightbox(props: {
     ];
   };
 
-  const isLinkedSet = () => (props.image?.linked_images?.length ?? 0) > 0;
-  const totalImages = () => slides().length;
+  const goNext = () => !isZoomed() && setCurrentIndex((i) => Math.min(slides().length - 1, i + 1));
+  const goPrev = () => !isZoomed() && setCurrentIndex((i) => Math.max(0, i - 1));
 
-  const goNext = () => setCurrentIndex((i) => Math.min(totalImages() - 1, i + 1));
-  const goPrev = () => setCurrentIndex((i) => Math.max(0, i - 1));
-
-  // ── Set Management ──
-  const handleAddToSet = async (file: File) => {
-    const img = props.image;
-    if (!img) return;
-    setUploading(true);
-    try {
-      const entry = await api.uploadToLinkedSet(img.id, file);
-      props.onImageUpdate(img.id, entry);
-      // Automatically jump to the newly added image at the end
-      setCurrentIndex(entry.linked_images.length);
-    } catch {
-      alert("Failed to add image to set");
-    }
-    setUploading(false);
-  };
-
-  const handleRemoveFromSet = async () => {
-    const img = props.image;
-    const idx = currentIndex();
-    if (!img || idx === 0) return; // Can't remove the cover image this way
-    const linked = img.linked_images?.[idx - 1];
-    if (!linked || !confirm("Remove this image from the set?")) return;
-    try {
-      const entry = await api.removeFromLinkedSet(img.id, linked.id);
-      props.onImageUpdate(img.id, entry);
-      // Adjust index if we were on the last image
-      const newTotal = 1 + entry.linked_images.length;
-      if (idx >= newTotal) {
-        setCurrentIndex(newTotal - 1);
-      }
-    } catch {
-      alert("Failed to remove image");
-    }
-  };
-
-  // ── Keyboard ──
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (!props.image) return;
-    if (e.key === "ArrowLeft") { goPrev(); e.preventDefault(); }
-    if (e.key === "ArrowRight") { goNext(); e.preventDefault(); }
-  };
-  onMount(() => document.addEventListener("keydown", onKeyDown));
-  onCleanup(() => document.removeEventListener("keydown", onKeyDown));
+  // --- Unified Theme Styles ---
+  const btnBase = "flex items-center justify-center h-10 transition-all border outline-none cursor-pointer shrink-0";
+  const btnIcon = "w-10 rounded-xl";
+  const inactiveStyles = "bg-gray-950/40 border-gray-800 text-gray-400 hover:bg-gray-800 hover:text-white";
+  const activeStyles = "bg-accent-500 border-accent-500 text-white shadow-[0_0_15px_rgba(255,85,85,0.2)]";
 
   return (
-    <Dialog open={!!props.image} onOpenChange={(open) => { if (!open) props.onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-40 bg-black/95" />
-        <Dialog.Content
-          class="fixed inset-0 z-40 flex flex-col items-center justify-center outline-none text-white overflow-hidden"
-          onClick={(e: MouseEvent) => { if (e.target === e.currentTarget) props.onClose(); }}
-        >
-          <Dialog.Title class="sr-only">Image viewer</Dialog.Title>
+    <Dialog open={!!props.image} onOpenChange={(open) => !open && props.onClose()}>
+      {/* Utility style for hiding scrollbars while keeping functionality, plus new mini-scrollbar */}
+      <style>
+        {`
+          .no-scrollbar::-webkit-scrollbar { display: none; }
+          .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-          {/* Top Controls */}
-          <div class={`absolute top-4 right-4 z-50 flex gap-2 transition-opacity duration-300 ${showUI() ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-             <Dialog.CloseButton class="text-white/70 hover:text-white p-2 rounded-full hover:bg-white/10 transition-colors cursor-pointer">
-              <X size={24} />
-            </Dialog.CloseButton>
+          /* Desktop Gallery Scrollbar */
+          .mini-scrollbar::-webkit-scrollbar { height: 6px; }
+          .mini-scrollbar::-webkit-scrollbar-track { background: transparent; }
+          .mini-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+          .mini-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.4); }
+        `}
+      </style>
+      <Dialog.Portal>
+        <Dialog.Overlay class="fixed inset-0 z-40 bg-gray-950/98 backdrop-blur-sm" />
+        <Dialog.Content class="fixed inset-0 z-50 flex flex-col outline-none text-gray-100 overflow-hidden font-sans">
+          
+          {/* Top Header */}
+          <div class={`absolute top-0 left-0 right-0 p-4 flex justify-between items-center z-[60] transition-all duration-300 ${showUI() ? 'translate-y-0' : '-translate-y-2'}`}>
+            <div class="flex gap-2">
+              <button onClick={() => setShowUI(!showUI())} class={`${btnBase} ${btnIcon} ${showUI() ? inactiveStyles : activeStyles}`}>
+                {showUI() ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            
+            <div class={`px-4 py-1.5 rounded-full bg-gray-900/50 border border-gray-800 backdrop-blur-md transition-opacity ${showUI() ? 'opacity-100' : 'opacity-0'}`}>
+              <span class="text-[10px] font-mono font-bold tracking-widest text-gray-400">
+                {String(currentIndex() + 1).padStart(2, '0')} / {String(slides().length).padStart(2, '0')}
+              </span>
+            </div>
+
+            <div class="flex gap-2">
+              <button onClick={props.onInfo} class={`${btnBase} ${btnIcon} ${inactiveStyles} ${!showUI() ? 'opacity-0' : ''}`}>
+                <Info size={18} />
+              </button>
+              <Dialog.CloseButton class={`${btnBase} ${btnIcon} bg-gray-900 border-gray-800 hover:border-accent-500 hover:text-accent-500`}>
+                <X size={20} />
+              </Dialog.CloseButton>
+            </div>
           </div>
 
-          <button 
-            onClick={() => setShowUI(!showUI())}
-            class="absolute top-4 left-4 z-50 p-2 rounded-full bg-black/20 text-white/70 hover:text-white border border-white/10 backdrop-blur-sm cursor-pointer"
-          >
-            {showUI() ? <EyeOff size={24} /> : <Eye size={24} />}
-          </button>
-
-          {/* Counter */}
-          <Show when={isLinkedSet() && showUI()}>
-            <div class="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-black/40 backdrop-blur-sm text-white/80 text-sm px-3 py-1 rounded-full border border-white/10">
-              {currentIndex() + 1} / {totalImages()}
-            </div>
-          </Show>
-
-          {/* Nav Arrows */}
-          <Show when={isLinkedSet() && showUI()}>
-            <button
-              class={`absolute left-4 top-1/2 -translate-y-1/2 z-50 p-2 rounded-full bg-black/40 text-white/70 hover:text-white transition-all cursor-pointer ${currentIndex() === 0 ? 'opacity-0 pointer-events-none' : ''}`}
-              onClick={goPrev}
-            >
-              <ChevronLeft size={28} />
-            </button>
-            <button
-              class={`absolute right-4 top-1/2 -translate-y-1/2 z-50 p-2 rounded-full bg-black/40 text-white/70 hover:text-white transition-all cursor-pointer ${currentIndex() >= totalImages() - 1 ? 'opacity-0 pointer-events-none' : ''}`}
-              onClick={goNext}
-            >
-              <ChevronRight size={28} />
-            </button>
-          </Show>
-
-          {/* Image Display Window (Current + Neighbors) */}
-          <div class="absolute inset-0 z-40">
+          {/* Viewport */}
+          <div class="flex-1 flex transition-transform duration-500 cubic-bezier(0.2, 0, 0, 1)" style={{ transform: `translateX(-${currentIndex() * 100}%)` }}>
             <For each={slides()}>
-              {(slide, i) => {
-                const distance = () => Math.abs(currentIndex() - i());
-                const isVisible = () => distance() === 0;
-                // Only render the current image and its immediate neighbors
-                const shouldRender = () => distance() <= 1;
-
-                return (
-                  <Show when={shouldRender()}>
-                    <div 
-                      class="absolute inset-0 transition-opacity duration-300 ease-in-out"
-                      style={{ 
-                        opacity: isVisible() ? 1 : 0, 
-                        "pointer-events": isVisible() ? "auto" : "none",
-                        "z-index": isVisible() ? 10 : 0
-                      }}
-                    >
-                      <ZoomableImage 
-                        src={slide.src} 
-                        active={isVisible()} 
-                      />
-                    </div>
-                  </Show>
-                );
-              }}
+              {(slide, i) => (
+                <div class="w-full h-full flex-shrink-0">
+                  <HammerZoom 
+                    src={slide.src} 
+                    active={currentIndex() === i()} 
+                    onZoomChange={setIsZoomed}
+                    onSwipeNext={goNext}
+                    onSwipePrev={goPrev}
+                  />
+                </div>
+              )}
             </For>
           </div>
 
-          <Show when={props.image}>
-            {(img) => (
-              <>
-                {/* Filmstrip */}
-                <Show when={isLinkedSet() && showUI()}>
-                  <div class="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex gap-1.5 bg-black/50 backdrop-blur-md p-1.5 rounded-lg border border-white/10 max-w-[80vw] overflow-x-auto scrollbar-hide">
-                    <For each={slides()}>
-                      {(slide, i) => (
-                        <FilmstripThumb
-                          src={slide.thumb}
-                          active={currentIndex() === i()}
-                          onClick={() => setCurrentIndex(i())}
-                        />
-                      )}
-                    </For>
-                  </div>
-                </Show>
+          {/* Nav Arrows (Desktop) */}
+          <Show when={showUI() && !isZoomed() && slides().length > 1}>
+            <button class="hidden lg:flex absolute left-8 top-1/2 -translate-y-1/2 z-50 p-4 text-gray-500 hover:text-white transition-colors" onClick={goPrev} style={{ opacity: currentIndex() === 0 ? 0.1 : 1 }}>
+              <ChevronLeft size={48} stroke-width={1} />
+            </button>
+            <button class="hidden lg:flex absolute right-8 top-1/2 -translate-y-1/2 z-50 p-4 text-gray-500 hover:text-white transition-colors" onClick={goNext} style={{ opacity: currentIndex() === slides().length - 1 ? 0.1 : 1 }}>
+              <ChevronRight size={48} stroke-width={1} />
+            </button>
+          </Show>
 
-                {/* Bottom Toolbar */}
-                <div class={`absolute bottom-0 left-0 right-0 flex flex-col sm:flex-row items-center justify-between gap-3 p-4 z-50 bg-black/60 backdrop-blur-md border-t border-white/10 transition-all duration-300 ${showUI() ? 'translate-y-0' : 'translate-y-full'}`}>
-                  {/* Tags */}
-                  <div class="flex gap-1.5 flex-wrap justify-center sm:justify-start">
-                    <For each={img().tags.slice(0, 3)}>
-                      {(tag) => (
-                        <span class="px-2 py-0.5 bg-white/15 text-white rounded text-[10px] uppercase tracking-wider flex items-center gap-1">
-                          <Tag size={10} /> {tag}
-                        </span>
-                      )}
-                    </For>
-                    <Show when={img().tags.length > 3}>
-                      <button onClick={props.onTag} class="px-2 py-0.5 bg-white/10 text-white/70 rounded text-[10px] hover:bg-white/20 cursor-pointer">
-                        +{img().tags.length - 3}
+          {/* Desktop/Mobile Bottom UI Container */}
+          <div class={`absolute bottom-0 left-0 right-0 z-50 p-4 sm:p-6 transition-all duration-300 ${showUI() ? 'translate-y-0' : 'translate-y-full'}`}>
+            <div class="w-full flex flex-col gap-4">
+              
+              {/* MOBILE ONLY: Gallery Filmstrip (Sits above buttons) */}
+              <Show when={showGallery() && !window.matchMedia("(min-width: 1024px)").matches}>
+                <div class="lg:hidden flex gap-2 bg-gray-950/80 backdrop-blur-xl p-2 rounded-2xl border border-gray-800 overflow-x-auto no-scrollbar w-full animate-in slide-in-from-bottom-2 fade-in duration-200">
+                  <For each={slides()}>
+                    {(slide, i) => (
+                      <button onClick={() => setCurrentIndex(i())} class={`relative flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 transition-all ${currentIndex() === i() ? 'border-accent-500 scale-105 shadow-lg' : 'border-transparent opacity-50'}`}>
+                        <img src={slide.thumb} class="w-full h-full object-cover" />
                       </button>
-                    </Show>
-                  </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
 
-                  {/* Actions */}
-                  <div class="flex gap-2">
-                    <LbButton onClick={props.onTag} icon={<Tag size={18} />}>Tag</LbButton>
-                    <LbButton onClick={props.onInfo} icon={<Info size={18} />}>Info</LbButton>
-
-                    <input 
-                      ref={addFileRef} 
-                      type="file" 
-                      class="hidden" 
-                      onChange={(e) => {
-                        const file = e.currentTarget.files?.[0];
-                        if (file) handleAddToSet(file);
-                        e.currentTarget.value = "";
-                      }} 
-                    />
-                    
-                    <LbButton onClick={() => addFileRef?.click()} icon={<Plus size={18} />} disabled={uploading()}>
-                      {uploading() ? "…" : "Add"}
-                    </LbButton>
-
-                    <Show when={currentIndex() > 0}>
-                      <button class="inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-white/15 text-orange-400 rounded-lg text-sm hover:bg-orange-500 hover:text-white cursor-pointer" onClick={handleRemoveFromSet}>
-                        <Minus size={18} /><span class="hidden sm:inline">Remove</span>
-                      </button>
-                    </Show>
-                    
-                    <a href={isLinkedSet() ? api.downloadUrl(img().id) : api.originalUrl(img().id)} download="" class="inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-white/15 text-white rounded-lg text-sm hover:bg-white/25 transition-colors no-underline">
-                      <Download size={18} /><span class="hidden sm:inline">{isLinkedSet() ? "ZIP" : "Download"}</span>
-                    </a>
-
-                    <button class="inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-white/15 text-red-400 rounded-lg text-sm hover:bg-red-500 hover:text-white cursor-pointer" onClick={props.onDelete}>
-                      <Trash2 size={18} /><span class="hidden sm:inline">Delete</span>
+              {/* Toolbar Row */}
+              <div class="flex items-end lg:items-center justify-between gap-4">
+                
+                {/* LEFT: Gallery Toggle + Desktop Gallery */}
+                <div class="flex items-center">
+                   {/* Toggle Button (Visible on both Mobile & Desktop if >1 slide) */}
+                   <Show when={slides().length > 1}>
+                    <button onClick={() => setShowGallery(!showGallery())} class={`${btnBase} ${btnIcon} mr-3 ${showGallery() ? activeStyles : inactiveStyles}`}>
+                      <LayoutGrid size={18} />
                     </button>
+                   </Show>
+
+                  {/* DESKTOP ONLY: Expanding Gallery */}
+                  <div 
+                    class={`hidden lg:flex items-center gap-2 overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] ${showGallery() ? 'max-w-[800px] opacity-100' : 'max-w-0 opacity-0'}`}
+                  >
+                    <div 
+                      // Enable horizontal scrolling with mouse wheel
+                      onWheel={(e) => {
+                        if (e.deltaY === 0) return;
+                        e.preventDefault();
+                        e.currentTarget.scrollLeft += e.deltaY;
+                      }}
+                      // Increased height to h-14 to accommodate scrollbar, switched to mini-scrollbar class
+                      class="h-14 flex items-center bg-gray-950/60 backdrop-blur-xl px-1.5 rounded-xl border border-gray-800 overflow-x-auto mini-scrollbar"
+                    >
+                      <div class="flex gap-1.5">
+                        <For each={slides()}>
+                          {(slide, i) => (
+                            <button 
+                              onClick={() => setCurrentIndex(i())}
+                              // Thumbnails are h-8 (32px)
+                              class={`relative flex-shrink-0 w-8 h-8 rounded-md overflow-hidden border-2 transition-all cursor-pointer ${currentIndex() === i() ? 'border-accent-500 scale-105 shadow-lg' : 'border-transparent opacity-40 hover:opacity-100'}`}
+                            >
+                              <img src={slide.thumb} class="w-full h-full object-cover" />
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </>
-            )}
-          </Show>
+
+                {/* RIGHT: Actions Cluster */}
+                <div class="flex items-center justify-end gap-2 w-auto">
+                  
+                  {/* Tag Button */}
+                  <button onClick={props.onTag} class={`${btnBase} ${btnIcon} ${inactiveStyles}`}>
+                    <Tag size={18} />
+                  </button>
+
+                  {/* Set Management Group */}
+                  <div class="flex items-center h-10 bg-gray-950/40 rounded-xl border border-gray-800 overflow-hidden shrink-0">
+                    <input ref={addFileRef} type="file" class="hidden" onChange={(e) => {
+                      const file = e.currentTarget.files?.[0];
+                      if (file && props.image) {
+                        setUploading(true);
+                        api.uploadToLinkedSet(props.image.id, file).then(entry => {
+                          props.onImageUpdate(props.image!.id, entry);
+                          setCurrentIndex(entry.linked_images.length);
+                        }).finally(() => setUploading(false));
+                      }
+                    }} />
+                    
+                    <button onClick={() => addFileRef?.click()} class="flex items-center justify-center h-full px-3 text-gray-400 hover:text-accent-500 hover:bg-gray-800 transition-colors border-r border-gray-800 outline-none" disabled={uploading()}>
+                      <Plus size={18} />
+                    </button>
+                    
+                    <button 
+                      class="flex items-center justify-center h-full px-3 text-gray-500 hover:text-accent-600 hover:bg-gray-800 transition-colors outline-none disabled:opacity-30" 
+                      disabled={currentIndex() === 0}
+                      onClick={() => {
+                        const linkedId = props.image?.linked_images[currentIndex()-1].id;
+                        if(linkedId && confirm("Remove from set?")) api.removeFromLinkedSet(props.image!.id, linkedId).then(e => props.onImageUpdate(props.image!.id, e));
+                      }}
+                    >
+                      <Minus size={18} />
+                    </button>
+                  </div>
+
+                  {/* System Actions */}
+                  <a href={api.highResUrl(slides()[currentIndex()]?.id || props.image?.id || '')} download={`${props.image?.id || 'image'}.jpg`} class={`${btnBase} ${btnIcon} ${inactiveStyles}`}>
+                    <Download size={18} />
+                  </a>
+                  
+                  <button onClick={props.onDelete} class={`${btnBase} ${btnIcon} border-gray-800 bg-red-500/10 text-accent-500 hover:bg-accent-500 hover:text-white`}>
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog>
-  );
-}
-
-// ── Components ──
-
-function ZoomableImage(props: { src: string; active: boolean }) {
-  let ref: HTMLImageElement | undefined;
-  let pzInstance: ReturnType<typeof panzoom> | undefined;
-
-  createEffect(() => {
-    // Only init panzoom for the visible slide
-    if (!props.active) {
-      if (pzInstance) { pzInstance.dispose(); pzInstance = undefined; }
-      return;
-    }
-
-    if (ref && !pzInstance) {
-      pzInstance = panzoom(ref, {
-        maxZoom: 5,
-        minZoom: 0.5,
-        bounds: true,
-        boundsPadding: 0.1,
-      });
-      ref.style.touchAction = "none";
-    }
-  });
-
-  onCleanup(() => pzInstance?.dispose());
-
-  return (
-    <div class="w-full h-full flex items-center justify-center overflow-hidden">
-      <img
-        ref={ref}
-        src={props.src}
-        alt=""
-        class="max-w-full max-h-full object-contain"
-        // Active image downloads immediately, neighbors download in background
-        loading={props.active ? "eager" : "lazy"}
-        decoding={props.active ? "sync" : "async"}
-      />
-    </div>
-  );
-}
-
-function LbButton(props: { onClick: () => void; children: any; icon: any; disabled?: boolean }) {
-  return (
-    <button
-      class={`inline-flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-white/15 text-white rounded-lg text-sm hover:bg-white/25 transition-colors cursor-pointer ${props.disabled ? 'opacity-50 pointer-events-none' : ''}`}
-      onClick={props.onClick}
-      disabled={props.disabled}
-    >
-      {props.icon}
-      <span class="hidden sm:inline">{props.children}</span>
-    </button>
-  );
-}
-
-function FilmstripThumb(props: { src: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      class={`w-12 h-12 rounded overflow-hidden flex-shrink-0 border-2 transition-all cursor-pointer ${
-        props.active ? 'border-white opacity-100 scale-110 shadow-lg' : 'border-transparent opacity-50 hover:opacity-80'
-      }`}
-      onClick={props.onClick}
-    >
-      <img src={props.src} alt="" class="w-full h-full object-cover" />
-    </button>
   );
 }
