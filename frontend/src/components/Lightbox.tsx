@@ -1,4 +1,4 @@
-import { Show, For, onMount, onCleanup, createSignal, createEffect, Accessor } from "solid-js";
+import { Show, For, onMount, onCleanup, createSignal, createEffect } from "solid-js";
 import { Dialog } from "@kobalte/core/dialog";
 import panzoom from "panzoom";
 import { 
@@ -30,11 +30,19 @@ export function Lightbox(props: {
   const [uploading, setUploading] = createSignal(false);
   let addFileRef: HTMLInputElement | undefined;
 
-  // Reset index when a different image opens
+  // ── Reset Logic ──
+  // We only want to reset the index to 0 if the actual Image ID changes.
+  // This prevents resetting when adding tags or adding images to the set.
+  let lastId: string | null = null;
   createEffect(() => {
-    if (props.image) setCurrentIndex(0);
+    const currentId = props.image?.id ?? null;
+    if (currentId !== lastId) {
+      setCurrentIndex(0);
+      lastId = currentId;
+    }
   });
 
+  // ── Data Helpers ──
   const slides = () => {
     const img = props.image;
     if (!img) return [];
@@ -54,7 +62,7 @@ export function Lightbox(props: {
   const goNext = () => setCurrentIndex((i) => Math.min(totalImages() - 1, i + 1));
   const goPrev = () => setCurrentIndex((i) => Math.max(0, i - 1));
 
-  // Upload/Remove logic (unchanged)
+  // ── Set Management ──
   const handleAddToSet = async (file: File) => {
     const img = props.image;
     if (!img) return;
@@ -62,36 +70,40 @@ export function Lightbox(props: {
     try {
       const entry = await api.uploadToLinkedSet(img.id, file);
       props.onImageUpdate(img.id, entry);
-    } catch { alert("Failed to add image to set"); }
+      // Automatically jump to the newly added image at the end
+      setCurrentIndex(entry.linked_images.length);
+    } catch {
+      alert("Failed to add image to set");
+    }
     setUploading(false);
   };
 
   const handleRemoveFromSet = async () => {
     const img = props.image;
     const idx = currentIndex();
-    if (!img || idx === 0) return;
+    if (!img || idx === 0) return; // Can't remove the cover image this way
     const linked = img.linked_images?.[idx - 1];
     if (!linked || !confirm("Remove this image from the set?")) return;
     try {
       const entry = await api.removeFromLinkedSet(img.id, linked.id);
       props.onImageUpdate(img.id, entry);
-      if (idx >= entry.linked_images.length + 1) {
-        setCurrentIndex(Math.max(0, entry.linked_images.length));
+      // Adjust index if we were on the last image
+      const newTotal = 1 + entry.linked_images.length;
+      if (idx >= newTotal) {
+        setCurrentIndex(newTotal - 1);
       }
-    } catch { alert("Failed to remove image"); }
+    } catch {
+      alert("Failed to remove image");
+    }
   };
 
-  // Keyboard navigation
+  // ── Keyboard ──
   const onKeyDown = (e: KeyboardEvent) => {
     if (!props.image) return;
     if (e.key === "ArrowLeft") { goPrev(); e.preventDefault(); }
     if (e.key === "ArrowRight") { goNext(); e.preventDefault(); }
   };
-
-  createEffect(() => {
-    if (props.image) document.addEventListener("keydown", onKeyDown);
-    else document.removeEventListener("keydown", onKeyDown);
-  });
+  onMount(() => document.addEventListener("keydown", onKeyDown));
   onCleanup(() => document.removeEventListener("keydown", onKeyDown));
 
   return (
@@ -141,12 +153,13 @@ export function Lightbox(props: {
             </button>
           </Show>
 
-          {/* Slide Window: Current + Neighbors */}
+          {/* Image Display Window (Current + Neighbors) */}
           <div class="absolute inset-0 z-40">
             <For each={slides()}>
               {(slide, i) => {
                 const distance = () => Math.abs(currentIndex() - i());
                 const isVisible = () => distance() === 0;
+                // Only render the current image and its immediate neighbors
                 const shouldRender = () => distance() <= 1;
 
                 return (
@@ -188,8 +201,9 @@ export function Lightbox(props: {
                   </div>
                 </Show>
 
-                {/* Toolbar */}
+                {/* Bottom Toolbar */}
                 <div class={`absolute bottom-0 left-0 right-0 flex flex-col sm:flex-row items-center justify-between gap-3 p-4 z-50 bg-black/60 backdrop-blur-md border-t border-white/10 transition-all duration-300 ${showUI() ? 'translate-y-0' : 'translate-y-full'}`}>
+                  {/* Tags */}
                   <div class="flex gap-1.5 flex-wrap justify-center sm:justify-start">
                     <For each={img().tags.slice(0, 3)}>
                       {(tag) => (
@@ -205,15 +219,21 @@ export function Lightbox(props: {
                     </Show>
                   </div>
 
+                  {/* Actions */}
                   <div class="flex gap-2">
                     <LbButton onClick={props.onTag} icon={<Tag size={18} />}>Tag</LbButton>
                     <LbButton onClick={props.onInfo} icon={<Info size={18} />}>Info</LbButton>
 
-                    <input ref={addFileRef} type="file" class="hidden" onChange={(e) => {
-                      const file = e.currentTarget.files?.[0];
-                      if (file) handleAddToSet(file);
-                      e.currentTarget.value = "";
-                    }} />
+                    <input 
+                      ref={addFileRef} 
+                      type="file" 
+                      class="hidden" 
+                      onChange={(e) => {
+                        const file = e.currentTarget.files?.[0];
+                        if (file) handleAddToSet(file);
+                        e.currentTarget.value = "";
+                      }} 
+                    />
                     
                     <LbButton onClick={() => addFileRef?.click()} icon={<Plus size={18} />} disabled={uploading()}>
                       {uploading() ? "…" : "Add"}
@@ -249,8 +269,8 @@ function ZoomableImage(props: { src: string; active: boolean }) {
   let ref: HTMLImageElement | undefined;
   let pzInstance: ReturnType<typeof panzoom> | undefined;
 
-  // Panzoom Logic: Only initialize if this specific slide is "active"
   createEffect(() => {
+    // Only init panzoom for the visible slide
     if (!props.active) {
       if (pzInstance) { pzInstance.dispose(); pzInstance = undefined; }
       return;
@@ -276,7 +296,7 @@ function ZoomableImage(props: { src: string; active: boolean }) {
         src={props.src}
         alt=""
         class="max-w-full max-h-full object-contain"
-        // Active image is eager, neighbors are lazy
+        // Active image downloads immediately, neighbors download in background
         loading={props.active ? "eager" : "lazy"}
         decoding={props.active ? "sync" : "async"}
       />
@@ -301,7 +321,7 @@ function FilmstripThumb(props: { src: string; active: boolean; onClick: () => vo
   return (
     <button
       class={`w-12 h-12 rounded overflow-hidden flex-shrink-0 border-2 transition-all cursor-pointer ${
-        props.active ? 'border-white opacity-100 scale-105' : 'border-transparent opacity-50 hover:opacity-80'
+        props.active ? 'border-white opacity-100 scale-110 shadow-lg' : 'border-transparent opacity-50 hover:opacity-80'
       }`}
       onClick={props.onClick}
     >
