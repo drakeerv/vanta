@@ -3,7 +3,7 @@ import {
   createEffect,
   onMount,
   onCleanup,
-  Index,
+  on,
   For,
   Show,
   type Accessor,
@@ -33,26 +33,21 @@ type SlideAction = { dir: "left" | "right"; ts: number } | null;
 
 /**
  * A single "slide" in the vertical feed.
- * Features a windowed horizontal carousel for linked sets.
  */
 function ReelSlide(props: {
   entry: ImageEntry;
   index: number;
   currentIndex: Accessor<number>;
-  slideAction: Accessor<SlideAction>; // Receive navigation commands
+  slideAction: Accessor<SlideAction>;
   onTag: () => void;
   onInfo: () => void;
 }) {
   const [subIndex, setSubIndex] = createSignal(0);
 
-  // Vertical Distance logic: Should we render this slide's contents at all?
   const isVerticalActive = () => props.currentIndex() === props.index;
   const verticalDistance = () => Math.abs(props.currentIndex() - props.index);
-  
-  // Render window: Render the current slide + 2 neighbors in each direction
   const shouldRenderVertical = () => verticalDistance() <= 2;
 
-  // Flatten the cover image and linked images into one array
   const slides = () => {
     const list = [
       { id: "cover", src: api.highResUrl(props.entry.id) },
@@ -68,24 +63,20 @@ function ReelSlide(props: {
   const goNext = () => setSubIndex((i) => Math.min(slides().length - 1, i + 1));
   const goPrev = () => setSubIndex((i) => Math.max(0, i - 1));
 
-  // Memory Safety: Reset sub-index if the user scrolls far away vertically
   createEffect(() => {
     if (verticalDistance() > 3) {
       setSubIndex(0);
     }
   });
 
-  // --- Keyboard Control (Horizontal) ---
-  createEffect(() => {
-    const action = props.slideAction();
-    // Only respond if this is the active vertical slide and we have an action
-    if (!isVerticalActive() || !action) return;
+  createEffect(
+    on(props.slideAction, (action) => {
+      if (!isVerticalActive() || !action) return;
+      if (action.dir === "left") goPrev();
+      if (action.dir === "right") goNext();
+    })
+  );
 
-    if (action.dir === "left") goPrev();
-    if (action.dir === "right") goNext();
-  });
-
-  // --- Improved Touch Handling ---
   let touchStartX = 0;
   let touchStartY = 0;
   let isHorizontalSwipe = false;
@@ -101,10 +92,8 @@ function ReelSlide(props: {
       if (e.cancelable) e.preventDefault();
       return;
     }
-
     const dx = Math.abs(e.touches[0].clientX - touchStartX);
     const dy = Math.abs(e.touches[0].clientY - touchStartY);
-
     if (dx > dy && dx > 10) {
       isHorizontalSwipe = true;
       if (e.cancelable) e.preventDefault();
@@ -113,7 +102,6 @@ function ReelSlide(props: {
 
   const onTouchEnd = (e: TouchEvent) => {
     if (!isHorizontalSwipe) return;
-    
     const dx = e.changedTouches[0].clientX - touchStartX;
     if (Math.abs(dx) > 50) {
       if (dx < 0) goNext();
@@ -123,7 +111,6 @@ function ReelSlide(props: {
 
   return (
     <div class="relative w-full h-full flex items-center justify-center bg-black select-none snap-start snap-always">
-      {/* Horizontal Carousel Area */}
       <div
         class="absolute inset-0 flex items-center justify-center overflow-hidden"
         style={{ "touch-action": "pan-y" }}
@@ -153,11 +140,7 @@ function ReelSlide(props: {
                       alt=""
                       class="w-full h-full object-contain"
                       draggable={false}
-                      loading={
-                        i() === subIndex() && isVerticalActive()
-                          ? "eager"
-                          : "lazy"
-                      }
+                      loading={i() === subIndex() && isVerticalActive() ? "eager" : "lazy"}
                       decoding={i() === subIndex() ? "sync" : "async"}
                     />
                   </div>
@@ -168,7 +151,7 @@ function ReelSlide(props: {
         </Show>
       </div>
 
-      {/* Linked-set arrows */}
+      {/* Navigation Arrows */}
       <Show when={isSet() && shouldRenderVertical()}>
         <div class="hidden md:block">
           <button
@@ -190,11 +173,9 @@ function ReelSlide(props: {
         </div>
       </Show>
 
-      {/* Linked-set indicators */}
+      {/* Set Indicators */}
       <Show when={isSet() && shouldRenderVertical()}>
-        <div 
-          class="absolute top-20 left-1/2 -translate-x-1/2 z-10 flex gap-1.5 items-center justify-center pointer-events-none"
-        >
+        <div class="absolute top-20 left-1/2 -translate-x-1/2 z-10 flex gap-1.5 items-center justify-center pointer-events-none">
           <Show 
             when={slides().length < 10}
             fallback={
@@ -207,9 +188,7 @@ function ReelSlide(props: {
               {(_, i) => (
                 <div
                   class={`h-1.5 rounded-full transition-all duration-300 ${
-                    i() === subIndex()
-                      ? "bg-white w-4"
-                      : "bg-white/30 w-1.5"
+                    i() === subIndex() ? "bg-white w-4" : "bg-white/30 w-1.5"
                   }`}
                 />
               )}
@@ -221,7 +200,6 @@ function ReelSlide(props: {
       {/* Bottom overlay */}
       <div class="absolute bottom-0 left-0 right-0 z-10 pointer-events-none">
         <div class="bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-16 pb-6 px-5 pointer-events-auto">
-          {/* Tags */}
           <div class="flex gap-1.5 flex-wrap mb-3">
             <For each={props.entry.tags.slice(0, 3)}>
               {(tag) => (
@@ -238,11 +216,7 @@ function ReelSlide(props: {
                 +{props.entry.tags.length - 3} more
               </button>
             </Show>
-            <Show when={props.entry.tags.length === 0}>
-              <span class="text-xs text-white/40 italic">No tags</span>
-            </Show>
           </div>
-
           <div class="flex gap-2">
             <button
               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/15 backdrop-blur-sm text-white rounded-lg text-xs hover:bg-white/25 transition-colors cursor-pointer"
@@ -276,30 +250,21 @@ export default function Reels(props: {
   const [modal, setModal] = createSignal<ModalType>(null);
   const [loaded, setLoaded] = createSignal(false);
   const [feed, setFeed] = createSignal<ImageEntry[]>([]);
-  
-  // Navigation signal to broadcast to children
   const [slideAction, setSlideAction] = createSignal<SlideAction>(null);
 
   let feedRef: HTMLDivElement | undefined;
 
-  // --- Keyboard Event Listener ---
   const handleKeyDown = (e: KeyboardEvent) => {
-    // Disable navigation if Search is open, a Modal is open, or focused on input
-    if (searchOpen() || modal() || (e.target as HTMLElement).tagName === "INPUT") {
-      return;
-    }
+    if (searchOpen() || modal() || (e.target as HTMLElement).tagName === "INPUT") return;
 
     if (e.key === "ArrowUp") {
       e.preventDefault();
-      const prevIndex = Math.max(0, activeIndex() - 1);
-      scrollToIndex(prevIndex);
+      scrollToIndex(Math.max(0, activeIndex() - 1));
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      const nextIndex = Math.min(feed().length - 1, activeIndex() + 1);
-      scrollToIndex(nextIndex);
+      scrollToIndex(Math.min(feed().length - 1, activeIndex() + 1));
     } else if (e.key === "ArrowLeft") {
       e.preventDefault();
-      // Use timestamp to ensure every press triggers the effect
       setSlideAction({ dir: "left", ts: Date.now() });
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
@@ -339,7 +304,6 @@ export default function Reels(props: {
     return a;
   }
 
-  // Handle store updates
   createEffect(() => {
     const imgs = store.images();
     setFeed((prev) => {
@@ -369,7 +333,6 @@ export default function Reels(props: {
     });
   };
 
-  // ── Scroll Tracking ──
   let observer: IntersectionObserver | undefined;
   const setupObserver = () => {
     if (observer) observer.disconnect();
@@ -394,7 +357,6 @@ export default function Reels(props: {
     requestAnimationFrame(setupObserver);
   });
 
-  // ── Mouse Drag Scrolling ──
   const [isDragging, setIsDragging] = createSignal(false);
   const [disableSnap, setDisableSnap] = createSignal(false);
   let dragStartY = 0;
@@ -427,7 +389,6 @@ export default function Reels(props: {
 
   return (
     <div class="fixed inset-0 z-30 bg-black flex flex-col">
-      {/* Search Overlay */}
       <div
         class={`absolute top-0 left-0 right-0 z-20 transition-all duration-300 ${
           searchOpen() ? "bg-black/80 backdrop-blur-md" : "bg-transparent pointer-events-none"
@@ -481,7 +442,6 @@ export default function Reels(props: {
         </div>
       </div>
 
-      {/* Main Feed */}
       <Show when={!loaded()}>
         <div class="flex-1 flex flex-col items-center justify-center text-white/60 gap-4">
           <h2 class="text-2xl font-bold text-white">Reels</h2>
@@ -505,12 +465,16 @@ export default function Reels(props: {
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseUp}
         >
-          <Index each={feed()}>
+          <For each={feed()}>
             {(entry, i) => (
-              <div class="w-full h-[100dvh] flex-shrink-0" data-index={i} style={{ "scroll-snap-align": "start" }}>
+              <div 
+                class="w-full h-[100dvh] flex-shrink-0" 
+                data-index={i()} 
+                style={{ "scroll-snap-align": "start" }}
+              >
                 <ReelSlide
-                  entry={entry()}
-                  index={i}
+                  entry={entry}
+                  index={i()}
                   currentIndex={activeIndex}
                   slideAction={slideAction}
                   onTag={() => setModal("tag")}
@@ -518,7 +482,7 @@ export default function Reels(props: {
                 />
               </div>
             )}
-          </Index>
+          </For>
         </div>
       </Show>
 
