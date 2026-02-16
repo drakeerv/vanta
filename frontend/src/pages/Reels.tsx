@@ -28,6 +28,9 @@ import {
 
 type ModalType = "tag" | "info" | null;
 
+// Helper type for horizontal navigation commands
+type SlideAction = { dir: "left" | "right"; ts: number } | null;
+
 /**
  * A single "slide" in the vertical feed.
  * Features a windowed horizontal carousel for linked sets.
@@ -36,6 +39,7 @@ function ReelSlide(props: {
   entry: ImageEntry;
   index: number;
   currentIndex: Accessor<number>;
+  slideAction: Accessor<SlideAction>; // Receive navigation commands
   onTag: () => void;
   onInfo: () => void;
 }) {
@@ -71,6 +75,16 @@ function ReelSlide(props: {
     }
   });
 
+  // --- Keyboard Control (Horizontal) ---
+  createEffect(() => {
+    const action = props.slideAction();
+    // Only respond if this is the active vertical slide and we have an action
+    if (!isVerticalActive() || !action) return;
+
+    if (action.dir === "left") goPrev();
+    if (action.dir === "right") goNext();
+  });
+
   // --- Improved Touch Handling ---
   let touchStartX = 0;
   let touchStartY = 0;
@@ -83,7 +97,6 @@ function ReelSlide(props: {
   };
 
   const onTouchMove = (e: TouchEvent) => {
-    // If we've already determined this is a horizontal swipe, prevent vertical scrolling
     if (isHorizontalSwipe) {
       if (e.cancelable) e.preventDefault();
       return;
@@ -92,7 +105,6 @@ function ReelSlide(props: {
     const dx = Math.abs(e.touches[0].clientX - touchStartX);
     const dy = Math.abs(e.touches[0].clientY - touchStartY);
 
-    // If movement is primarily horizontal and meets a threshold, lock it
     if (dx > dy && dx > 10) {
       isHorizontalSwipe = true;
       if (e.cancelable) e.preventDefault();
@@ -114,7 +126,7 @@ function ReelSlide(props: {
       {/* Horizontal Carousel Area */}
       <div
         class="absolute inset-0 flex items-center justify-center overflow-hidden"
-        style={{ "touch-action": "pan-y" }} // Tell browser we handle horizontal gestures
+        style={{ "touch-action": "pan-y" }}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
@@ -156,7 +168,7 @@ function ReelSlide(props: {
         </Show>
       </div>
 
-      {/* Linked-set arrows (desktop hidden on mobile) */}
+      {/* Linked-set arrows */}
       <Show when={isSet() && shouldRenderVertical()}>
         <div class="hidden md:block">
           <button
@@ -178,7 +190,7 @@ function ReelSlide(props: {
         </div>
       </Show>
 
-      {/* Linked-set indicators (Dots or Counter) */}
+      {/* Linked-set indicators */}
       <Show when={isSet() && shouldRenderVertical()}>
         <div 
           class="absolute top-20 left-1/2 -translate-x-1/2 z-10 flex gap-1.5 items-center justify-center pointer-events-none"
@@ -206,7 +218,7 @@ function ReelSlide(props: {
         </div>
       </Show>
 
-      {/* Bottom overlay — tags + actions */}
+      {/* Bottom overlay */}
       <div class="absolute bottom-0 left-0 right-0 z-10 pointer-events-none">
         <div class="bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-16 pb-6 px-5 pointer-events-auto">
           {/* Tags */}
@@ -264,16 +276,56 @@ export default function Reels(props: {
   const [modal, setModal] = createSignal<ModalType>(null);
   const [loaded, setLoaded] = createSignal(false);
   const [feed, setFeed] = createSignal<ImageEntry[]>([]);
+  
+  // Navigation signal to broadcast to children
+  const [slideAction, setSlideAction] = createSignal<SlideAction>(null);
 
   let feedRef: HTMLDivElement | undefined;
+
+  // --- Keyboard Event Listener ---
+  const handleKeyDown = (e: KeyboardEvent) => {
+    // Disable navigation if Search is open, a Modal is open, or focused on input
+    if (searchOpen() || modal() || (e.target as HTMLElement).tagName === "INPUT") {
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const prevIndex = Math.max(0, activeIndex() - 1);
+      scrollToIndex(prevIndex);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const nextIndex = Math.min(feed().length - 1, activeIndex() + 1);
+      scrollToIndex(nextIndex);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      // Use timestamp to ensure every press triggers the effect
+      setSlideAction({ dir: "left", ts: Date.now() });
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setSlideAction({ dir: "right", ts: Date.now() });
+    }
+  };
+
+  const scrollToIndex = (index: number) => {
+    if (!feedRef) return;
+    setActiveIndex(index);
+    feedRef.scrollTo({
+      top: index * feedRef.clientHeight,
+      behavior: "smooth",
+    });
+  };
 
   onMount(() => {
     store.loadTags();
     document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
   });
+
   onCleanup(() => {
     document.body.style.overflow = "";
     observer?.disconnect();
+    window.removeEventListener("keydown", handleKeyDown);
   });
 
   const activeImage = () => feed()[activeIndex()] ?? null;
@@ -460,6 +512,7 @@ export default function Reels(props: {
                   entry={entry()}
                   index={i}
                   currentIndex={activeIndex}
+                  slideAction={slideAction}
                   onTag={() => setModal("tag")}
                   onInfo={() => setModal("info")}
                 />
