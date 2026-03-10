@@ -64,7 +64,6 @@ export function Lightbox(props: {
   const goPrev = () => !isZoomed() && setCurrentIndex((i) => Math.max(0, i - 1));
 
   // --- Unified Theme Styles ---
-  // Optimized: Switched from 'transition-all' to 'transition-colors'
   const btnBase = "flex items-center justify-center h-10 transition-colors duration-200 border outline-none cursor-pointer shrink-0";
   const btnIcon = "w-10 rounded-xl";
   const inactiveStyles = "bg-gray-950/40 border-gray-800 text-gray-400 hover:bg-gray-800 hover:text-white";
@@ -112,11 +111,12 @@ export function Lightbox(props: {
             </div>
           </div>
 
-          {/* Viewport */}
-          <div class="flex-1 flex transition-transform duration-500 ease-[cubic-bezier(0.2,0,0,1)]" style={{ transform: `translateX(-${currentIndex() * 100}%)` }}>
+          {/* Viewport - ADDED min-h-0 TO PREVENT OVERFLOW BUG */}
+          <div class="flex-1 min-h-0 flex transition-transform duration-500 ease-[cubic-bezier(0.2,0,0,1)]" style={{ transform: `translateX(-${currentIndex() * 100}%)` }}>
             <For each={slides()}>
               {(slide, i) => (
-                <div class="w-full h-full flex-shrink-0">
+                // Added `relative` here so absolute positioning works
+                <div class="w-full h-full flex-shrink-0 relative">
                   <Show when={Math.abs(currentIndex() - i()) <= 1}>
                     <Suspense fallback={<div class="w-full h-full flex items-center justify-center text-gray-500">Loading...</div>}>
                       <HammerZoom 
@@ -147,6 +147,7 @@ export function Lightbox(props: {
           <div class={`absolute bottom-0 left-0 right-0 z-50 p-4 sm:p-6 transition-transform duration-300 ${showUI() ? 'translate-y-0' : 'translate-y-full'}`}>
             <div class="w-full flex flex-col gap-4">
               
+              {/* MOBILE ONLY: Gallery Filmstrip */}
               <Show when={showGallery()}>
                 <div class="lg:hidden flex gap-2 bg-gray-900 lg:bg-gray-950/80 lg:backdrop-blur-xl p-2 rounded-2xl border border-gray-800 overflow-x-auto no-scrollbar w-full animate-in slide-in-from-bottom-2 fade-in duration-200">
                   <For each={slides()}>

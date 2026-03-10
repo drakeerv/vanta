@@ -82,7 +82,7 @@ export function HammerZoom(props: Props) {
   });
 
   return (
-    <div ref={containerRef} class="w-full h-full flex items-center justify-center overflow-hidden touch-none select-none">
+    <div ref={containerRef} class="absolute inset-0 flex items-center justify-center overflow-hidden touch-none select-none">
       <img 
         ref={imgRef} 
         src={props.src} 
