@@ -83,7 +83,15 @@ export function HammerZoom(props: Props) {
 
   return (
     <div ref={containerRef} class="w-full h-full flex items-center justify-center overflow-hidden touch-none select-none">
-      <img ref={imgRef} src={props.src} alt="" class="max-w-[95%] max-h-[95%] object-contain will-change-transform" draggable={false} />
+      <img 
+        ref={imgRef} 
+        src={props.src} 
+        alt="" 
+        class="w-[95%] h-[95%] object-contain will-change-transform" 
+        draggable={false} 
+        decoding="async"
+        fetchpriority={props.active ? "high" : "low"}
+      />
     </div>
   );
 }

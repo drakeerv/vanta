@@ -1,4 +1,4 @@
-import { Show, For, createSignal, createEffect } from "solid-js";
+import { Show, For, createSignal, createEffect, lazy, Suspense } from "solid-js";
 import { Dialog } from "@kobalte/core/dialog";
 import { 
   Tag, Info, Download, Trash2, X, Eye, EyeOff, 
@@ -6,7 +6,9 @@ import {
 } from "lucide-solid";
 import type { ImageEntry } from "../api";
 import * as api from "../api";
-import { HammerZoom } from "./HammerZoom";
+
+// Lazy load HammerJS only when Lightbox is actually opened
+const HammerZoom = lazy(() => import("./HammerZoom").then(module => ({ default: module.HammerZoom })));
 
 export function Lightbox(props: {
   image: ImageEntry | null;
@@ -16,13 +18,13 @@ export function Lightbox(props: {
   onDelete: () => void;
   onImageUpdate: (id: string, entry: ImageEntry) => void;
 }) {
-  const [showUI, setShowUI] = createSignal(true);
+  const[showUI, setShowUI] = createSignal(true);
   
   // Default gallery to true on large screens, false on mobile
   const [showGallery, setShowGallery] = createSignal(window.innerWidth > 1024);
   
   const [currentIndex, setCurrentIndex] = createSignal(0);
-  const [isZoomed, setIsZoomed] = createSignal(false);
+  const[isZoomed, setIsZoomed] = createSignal(false);
   const [uploading, setUploading] = createSignal(false);
   let addFileRef: HTMLInputElement | undefined;
 
@@ -33,7 +35,7 @@ export function Lightbox(props: {
   const slides = () => {
     const img = props.image;
     if (!img) return [];
-    return [
+    return[
       { id: "cover", src: api.highResUrl(img.id), thumb: api.thumbnailUrl(img.id) },
       ...(img.linked_images ?? []).map((l) => ({
         id: l.id,
@@ -43,18 +45,33 @@ export function Lightbox(props: {
     ];
   };
 
+  // Preload next and previous high-res images in the background for instant swiping
+  createEffect(() => {
+    const current = currentIndex();
+    const allSlides = slides();
+    
+    if (current + 1 < allSlides.length) {
+      const nextImg = new Image();
+      nextImg.src = allSlides[current + 1].src;
+    }
+    if (current - 1 >= 0) {
+      const prevImg = new Image();
+      prevImg.src = allSlides[current - 1].src;
+    }
+  });
+
   const goNext = () => !isZoomed() && setCurrentIndex((i) => Math.min(slides().length - 1, i + 1));
   const goPrev = () => !isZoomed() && setCurrentIndex((i) => Math.max(0, i - 1));
 
   // --- Unified Theme Styles ---
-  const btnBase = "flex items-center justify-center h-10 transition-all border outline-none cursor-pointer shrink-0";
+  // Optimized: Switched from 'transition-all' to 'transition-colors'
+  const btnBase = "flex items-center justify-center h-10 transition-colors duration-200 border outline-none cursor-pointer shrink-0";
   const btnIcon = "w-10 rounded-xl";
   const inactiveStyles = "bg-gray-950/40 border-gray-800 text-gray-400 hover:bg-gray-800 hover:text-white";
   const activeStyles = "bg-accent-500 border-accent-500 text-white shadow-[0_0_15px_rgba(255,85,85,0.2)]";
 
   return (
     <Dialog open={!!props.image} onOpenChange={(open) => !open && props.onClose()}>
-      {/* Utility style for hiding scrollbars while keeping functionality, plus new mini-scrollbar */}
       <style>
         {`
           .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -72,21 +89,21 @@ export function Lightbox(props: {
         <Dialog.Content class="fixed inset-0 z-50 flex flex-col outline-none text-gray-100 overflow-hidden font-sans">
           
           {/* Top Header */}
-          <div class={`absolute top-0 left-0 right-0 p-4 flex justify-between items-center z-[60] transition-all duration-300 ${showUI() ? 'translate-y-0' : '-translate-y-2'}`}>
+          <div class={`absolute top-0 left-0 right-0 p-4 flex justify-between items-center z-[60] transition-transform duration-300 ${showUI() ? 'translate-y-0' : '-translate-y-2'}`}>
             <div class="flex gap-2">
               <button onClick={() => setShowUI(!showUI())} class={`${btnBase} ${btnIcon} ${showUI() ? inactiveStyles : activeStyles}`}>
                 {showUI() ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
             
-            <div class={`px-4 py-1.5 rounded-full bg-gray-900/50 border border-gray-800 backdrop-blur-md transition-opacity ${showUI() ? 'opacity-100' : 'opacity-0'}`}>
+            <div class={`px-4 py-1.5 rounded-full bg-gray-900/50 border border-gray-800 backdrop-blur-md transition-opacity duration-300 ${showUI() ? 'opacity-100' : 'opacity-0'}`}>
               <span class="text-[10px] font-mono font-bold tracking-widest text-gray-400">
                 {String(currentIndex() + 1).padStart(2, '0')} / {String(slides().length).padStart(2, '0')}
               </span>
             </div>
 
             <div class="flex gap-2">
-              <button onClick={props.onInfo} class={`${btnBase} ${btnIcon} ${inactiveStyles} ${!showUI() ? 'opacity-0' : ''}`}>
+              <button onClick={props.onInfo} class={`${btnBase} ${btnIcon} ${inactiveStyles} transition-opacity duration-300 ${!showUI() ? 'opacity-0' : ''}`}>
                 <Info size={18} />
               </button>
               <Dialog.CloseButton class={`${btnBase} ${btnIcon} bg-gray-900 border-gray-800 hover:border-accent-500 hover:text-accent-500`}>
@@ -96,17 +113,21 @@ export function Lightbox(props: {
           </div>
 
           {/* Viewport */}
-          <div class="flex-1 flex transition-transform duration-500 cubic-bezier(0.2, 0, 0, 1)" style={{ transform: `translateX(-${currentIndex() * 100}%)` }}>
+          <div class="flex-1 flex transition-transform duration-500 ease-[cubic-bezier(0.2,0,0,1)]" style={{ transform: `translateX(-${currentIndex() * 100}%)` }}>
             <For each={slides()}>
               {(slide, i) => (
                 <div class="w-full h-full flex-shrink-0">
-                  <HammerZoom 
-                    src={slide.src} 
-                    active={currentIndex() === i()} 
-                    onZoomChange={setIsZoomed}
-                    onSwipeNext={goNext}
-                    onSwipePrev={goPrev}
-                  />
+                  <Show when={Math.abs(currentIndex() - i()) <= 1}>
+                    <Suspense fallback={<div class="w-full h-full flex items-center justify-center text-gray-500">Loading...</div>}>
+                      <HammerZoom 
+                        src={slide.src} 
+                        active={currentIndex() === i()} 
+                        onZoomChange={setIsZoomed}
+                        onSwipeNext={goNext}
+                        onSwipePrev={goPrev}
+                      />
+                    </Suspense>
+                  </Show>
                 </div>
               )}
             </For>
@@ -123,16 +144,18 @@ export function Lightbox(props: {
           </Show>
 
           {/* Desktop/Mobile Bottom UI Container */}
-          <div class={`absolute bottom-0 left-0 right-0 z-50 p-4 sm:p-6 transition-all duration-300 ${showUI() ? 'translate-y-0' : 'translate-y-full'}`}>
+          <div class={`absolute bottom-0 left-0 right-0 z-50 p-4 sm:p-6 transition-transform duration-300 ${showUI() ? 'translate-y-0' : 'translate-y-full'}`}>
             <div class="w-full flex flex-col gap-4">
               
-              {/* MOBILE ONLY: Gallery Filmstrip (Sits above buttons) */}
-              <Show when={showGallery() && !window.matchMedia("(min-width: 1024px)").matches}>
-                <div class="lg:hidden flex gap-2 bg-gray-950/80 backdrop-blur-xl p-2 rounded-2xl border border-gray-800 overflow-x-auto no-scrollbar w-full animate-in slide-in-from-bottom-2 fade-in duration-200">
+              <Show when={showGallery()}>
+                <div class="lg:hidden flex gap-2 bg-gray-900 lg:bg-gray-950/80 lg:backdrop-blur-xl p-2 rounded-2xl border border-gray-800 overflow-x-auto no-scrollbar w-full animate-in slide-in-from-bottom-2 fade-in duration-200">
                   <For each={slides()}>
                     {(slide, i) => (
-                      <button onClick={() => setCurrentIndex(i())} class={`relative flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 transition-all ${currentIndex() === i() ? 'border-accent-500 scale-105 shadow-lg' : 'border-transparent opacity-50'}`}>
-                        <img src={slide.thumb} class="w-full h-full object-cover" />
+                      <button 
+                        onClick={() => setCurrentIndex(i())} 
+                        class={`relative flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 transition-[transform,border-color,opacity,box-shadow] duration-200 ${currentIndex() === i() ? 'border-accent-500 scale-105 shadow-lg' : 'border-transparent opacity-50'}`}
+                      >
+                        <img src={slide.thumb} class="w-full h-full object-cover" loading="lazy" />
                       </button>
                     )}
                   </For>
@@ -144,7 +167,6 @@ export function Lightbox(props: {
                 
                 {/* LEFT: Gallery Toggle + Desktop Gallery */}
                 <div class="flex items-center">
-                   {/* Toggle Button (Visible on both Mobile & Desktop if >1 slide) */}
                    <Show when={slides().length > 1}>
                     <button onClick={() => setShowGallery(!showGallery())} class={`${btnBase} ${btnIcon} mr-3 ${showGallery() ? activeStyles : inactiveStyles}`}>
                       <LayoutGrid size={18} />
@@ -152,17 +174,13 @@ export function Lightbox(props: {
                    </Show>
 
                   {/* DESKTOP ONLY: Expanding Gallery */}
-                  <div 
-                    class={`hidden lg:flex items-center gap-2 overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] ${showGallery() ? 'max-w-[800px] opacity-100' : 'max-w-0 opacity-0'}`}
-                  >
+                  <div class={`hidden lg:flex items-center gap-2 overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] ${showGallery() ? 'max-w-[800px] opacity-100' : 'max-w-0 opacity-0'}`}>
                     <div 
-                      // Enable horizontal scrolling with mouse wheel
                       onWheel={(e) => {
                         if (e.deltaY === 0) return;
                         e.preventDefault();
                         e.currentTarget.scrollLeft += e.deltaY;
                       }}
-                      // Increased height to h-14 to accommodate scrollbar, switched to mini-scrollbar class
                       class="h-14 flex items-center bg-gray-950/60 backdrop-blur-xl px-1.5 rounded-xl border border-gray-800 overflow-x-auto mini-scrollbar"
                     >
                       <div class="flex gap-1.5">
@@ -170,10 +188,9 @@ export function Lightbox(props: {
                           {(slide, i) => (
                             <button 
                               onClick={() => setCurrentIndex(i())}
-                              // Thumbnails are h-8 (32px)
-                              class={`relative flex-shrink-0 w-8 h-8 rounded-md overflow-hidden border-2 transition-all cursor-pointer ${currentIndex() === i() ? 'border-accent-500 scale-105 shadow-lg' : 'border-transparent opacity-40 hover:opacity-100'}`}
+                              class={`relative flex-shrink-0 w-8 h-8 rounded-md overflow-hidden border-2 transition-[transform,border-color,opacity,box-shadow] duration-200 cursor-pointer ${currentIndex() === i() ? 'border-accent-500 scale-105 shadow-lg' : 'border-transparent opacity-40 hover:opacity-100'}`}
                             >
-                              <img src={slide.thumb} class="w-full h-full object-cover" />
+                              <img src={slide.thumb} class="w-full h-full object-cover" loading="lazy" />
                             </button>
                           )}
                         </For>
@@ -184,13 +201,10 @@ export function Lightbox(props: {
 
                 {/* RIGHT: Actions Cluster */}
                 <div class="flex items-center justify-end gap-2 w-auto">
-                  
-                  {/* Tag Button */}
                   <button onClick={props.onTag} class={`${btnBase} ${btnIcon} ${inactiveStyles}`}>
                     <Tag size={18} />
                   </button>
 
-                  {/* Set Management Group */}
                   <div class="flex items-center h-10 bg-gray-950/40 rounded-xl border border-gray-800 overflow-hidden shrink-0">
                     <input ref={addFileRef} type="file" class="hidden" onChange={(e) => {
                       const file = e.currentTarget.files?.[0];
@@ -219,7 +233,6 @@ export function Lightbox(props: {
                     </button>
                   </div>
 
-                  {/* System Actions */}
                   <a href={api.highResUrl(slides()[currentIndex()]?.id || props.image?.id || '')} download={`${props.image?.id || 'image'}.jpg`} class={`${btnBase} ${btnIcon} ${inactiveStyles}`}>
                     <Download size={18} />
                   </a>
