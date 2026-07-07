@@ -18,6 +18,23 @@ export function Lightbox(props: {
   onDelete: () => void;
   onImageUpdate: (id: string, entry: ImageEntry) => void;
 }) {
+  const extFromMime = (mime?: string) => {
+    switch (mime) {
+      case "image/png":
+        return "png";
+      case "image/webp":
+        return "webp";
+      case "image/gif":
+        return "gif";
+      case "image/avif":
+        return "avif";
+      case "image/jxl":
+        return "jxl";
+      default:
+        return "jpg";
+    }
+  };
+
   const[showUI, setShowUI] = createSignal(true);
   
   // Default gallery to true on large screens, false on mobile
@@ -36,11 +53,19 @@ export function Lightbox(props: {
     const img = props.image;
     if (!img) return [];
     return[
-      { id: "cover", src: api.highResUrl(img.id), thumb: api.thumbnailUrl(img.id) },
+      {
+        id: "cover",
+        src: api.highResUrl(img.id),
+        thumb: api.thumbnailUrl(img.id),
+        downloadUrl: api.originalUrl(img.id),
+        downloadName: `${img.id}.${extFromMime(img.original_mime)}`,
+      },
       ...(img.linked_images ?? []).map((l) => ({
         id: l.id,
         src: api.linkedHighResUrl(img.id, l.id),
         thumb: api.linkedThumbnailUrl(img.id, l.id),
+        downloadUrl: api.linkedOriginalUrl(img.id, l.id),
+        downloadName: `${l.id}.${extFromMime(l.original_mime)}`,
       })),
     ];
   };
@@ -234,7 +259,11 @@ export function Lightbox(props: {
                     </button>
                   </div>
 
-                  <a href={api.highResUrl(slides()[currentIndex()]?.id || props.image?.id || '')} download={`${props.image?.id || 'image'}.jpg`} class={`${btnBase} ${btnIcon} ${inactiveStyles}`}>
+                  <a
+                    href={slides()[currentIndex()]?.downloadUrl || api.originalUrl(props.image?.id || '')}
+                    download={slides()[currentIndex()]?.downloadName || `${props.image?.id || 'image'}.jpg`}
+                    class={`${btnBase} ${btnIcon} ${inactiveStyles}`}
+                  >
                     <Download size={18} />
                   </a>
                   
